@@ -30,3 +30,4 @@ Thumbs.db
 .mypy_cache/
 *.tmp
 *.exe
+.ruff_cache/

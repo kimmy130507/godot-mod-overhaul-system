@@ -1,25 +1,19 @@
 import os
-import tempfile
-import stat
 import time
-import json
-import shutil
-import socket
-import pathlib
-import subprocess
-import sys
+
 import pytest
 
 # import functions under test
 from mod_loader import (
+    acquire_app_lock,
+    acquire_workroot_lock,
     atomic_write_bytes,
     atomic_write_copy,
     ensure_within,
-    acquire_app_lock,
     release_app_lock,
-    acquire_workroot_lock,
     release_platform_lock,
 )
+
 
 def test_atomic_write_bytes_and_permissions(tmp_path):
     dest = tmp_path / "out.bin"
@@ -30,6 +24,7 @@ def test_atomic_write_bytes_and_permissions(tmp_path):
     mode = dest.stat().st_mode & 0o777
     assert mode in (0o640, 0o644, 0o600)  # allow some platform variance
 
+
 def test_atomic_write_copy(tmp_path):
     src = tmp_path / "src.txt"
     dst = tmp_path / "dst.txt"
@@ -37,6 +32,7 @@ def test_atomic_write_copy(tmp_path):
     atomic_write_copy(str(src), str(dst))
     assert dst.exists()
     assert dst.read_text(encoding="utf-8") == "line1\nline2\n"
+
 
 def test_ensure_within(tmp_path):
     base = tmp_path / "base"
@@ -52,6 +48,7 @@ def test_ensure_within(tmp_path):
     outside.write_text("y")
     with pytest.raises(RuntimeError):
         ensure_within(str(base), str(outside))
+
 
 def test_file_lock_acquire_and_release(tmp_path):
     lock_path = str(tmp_path / "testmodloader.lock")
@@ -71,7 +68,8 @@ def test_file_lock_acquire_and_release(tmp_path):
     if os.path.exists(lock_path):
         with open(lock_path, "rb") as f:
             d = f.read().decode("utf-8").strip()
-            assert d == "" or d == str(os.getpid()) == False
+            assert d == "" or d == str(os.getpid())
+
 
 def test_acquire_workroot_lock_and_release(tmp_path):
     wr = str(tmp_path / "workroot")

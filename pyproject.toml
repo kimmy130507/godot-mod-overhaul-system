@@ -20,3 +20,17 @@ dependencies = []
 
 [project.scripts]
 godot-mod-loader = "mod_loader:main"
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"]
+exclude = [
+  ".git",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "build",
+  "dist",
+  ".eggs",
+  ".github",
+]
