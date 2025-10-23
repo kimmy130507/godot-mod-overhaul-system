@@ -39,21 +39,26 @@ if getattr(sys, "frozen", False):
 else:
     BASE_DIR = os.path.dirname(__file__)
 
+# Project identity
+__title__ = "Godot Mod Overhaul System"
+__shortname__ = "GMOS"
+__version__ = "1.0"
+
 # Prefer per-user writable location for logs and artifacts
 if os.name == "nt":
     APPDATA_BASE = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or BASE_DIR
 else:
     APPDATA_BASE = os.path.expanduser("~/.local/share")
 
-LOG_DIR = os.path.join(APPDATA_BASE, "mdrg_modloader", "logs")
+LOG_DIR = os.path.join(APPDATA_BASE, "gmos", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
 ROOT_DIR = BASE_DIR
 
-logger = logging.getLogger("modloader")
+logger = logging.getLogger("gmos")
 logger.setLevel(logging.DEBUG)
 rot = logging.handlers.RotatingFileHandler(
-    os.path.join(LOG_DIR, "modloader.log"),
+    os.path.join(LOG_DIR, "gmos.log"),
     maxBytes=5 * 1024 * 1024,
     backupCount=5,
     encoding="utf-8",
@@ -69,7 +74,7 @@ def _excepthook(exc_type, exc, tb):
         from tkinter import messagebox
 
         messagebox.showerror(
-            "Fatal Error", "An unexpected error occurred. See logs/modloader.log"
+            "Fatal Error", "An unexpected error occurred. See logs/gmos.log"
         )
     except Exception:
         pass
@@ -79,7 +84,7 @@ sys.excepthook = _excepthook
 
 # ----------------- single-instance lock helpers ---------------------------
 LOCK_FD = None
-LOCK_PATH = os.path.join(LOG_DIR, "modloader.lock")
+LOCK_PATH = os.path.join(LOG_DIR, "gmos.lock")
 CURRENT_LOCK_PATH = None  # realpath of lock we currently hold (global or per-workroot)
 _PLATFORM_HANDLE = None
 
@@ -334,7 +339,7 @@ def acquire_workroot_lock(work_root: str) -> bool:
             # record current lock path for consistency with file-based code
             try:
                 global CURRENT_LOCK_PATH
-                CURRENT_LOCK_PATH = os.path.join(wr, ".modloader.lock")
+                CURRENT_LOCK_PATH = os.path.join(wr, ".gmos.lock")
             except Exception:
                 pass
             atexit.register(release_platform_lock)
@@ -343,13 +348,13 @@ def acquire_workroot_lock(work_root: str) -> bool:
         logger.exception("Platform lock attempt failed; falling back to file lock")
 
     # fallback to file-based lock
-    return acquire_app_lock(os.path.join(wr, ".modloader.lock"))
+    return acquire_app_lock(os.path.join(wr, ".gmos.lock"))
 
 
 def wire_workroot_locking(app):
     """
     Watch app.vars['work_root_dir'] and switch the lock automatically
-    to workroot/.modloader.lock when the user selects a work root.
+    to workroot/.gmos.lock when the user selects a work root.
     """
     try:
         if not hasattr(app, "vars") or "work_root_dir" not in app.vars:
@@ -374,9 +379,7 @@ def wire_workroot_locking(app):
                     pass
 
                 # Prepare new lock path and attempt to acquire it with short retries
-                new_lock_path = os.path.join(
-                    os.path.realpath(new_wr), ".modloader.lock"
-                )
+                new_lock_path = os.path.join(os.path.realpath(new_wr), ".gmos.lock")
                 fd_new = None
                 attempts = 5
                 for _ in range(attempts):
@@ -617,13 +620,13 @@ def acquire_platform_lock_for_workroot(workroot: str):
         return None
     # prefer Windows mutex
     if os.name == "nt":
-        name = f"mdrg_modloader_{abs(hash(workroot))}"
+        name = f"gmos_{abs(hash(workroot))}"
         h = _try_windows_mutex(name)
         if h:
             _PLATFORM_HANDLE = ("win", h)
             return _PLATFORM_HANDLE
     # try AF_UNIX (Linux, macOS)
-    sock_path = os.path.join(os.path.realpath(workroot), ".modloader.sock")
+    sock_path = os.path.join(os.path.realpath(workroot), ".gmos.sock")
     h = _try_unix_socket(sock_path)
     if h:
         _PLATFORM_HANDLE = ("unix", h)
@@ -740,7 +743,7 @@ def _load_instructions_from_json(path):
 
 
 def _cli_main(argv=None):
-    p = argparse.ArgumentParser(description="Mod Loader headless dry-run")
+    p = argparse.ArgumentParser(description="GMOS headless dry-run")
     p.add_argument("--original", "-o", required=True, help="Original game directory")
     p.add_argument(
         "--workroot",
@@ -998,11 +1001,7 @@ def get_function_block(lines: List[str], func_name: str) -> Optional[Tuple[int, 
 def parse_mod_config(mod_path: str) -> Optional[Dict[str, Any]]:
     """Parses a mod configuration file (INI-style) into a structured dictionary."""
     config_file = next(
-        (
-            f
-            for f in ["mod.mos", "mod.ini", "mod.txt"]
-            if os.path.exists(os.path.join(mod_path, f))
-        ),
+        (f for f in ["mod.mos"] if os.path.exists(os.path.join(mod_path, f))),
         None,
     )
     if not config_file:
@@ -1249,28 +1248,90 @@ def _parse_source_with_meta(spec: str):
 
 
 def _res_to_path(res_path: str) -> str:
-    """Converts a GDScript resource path (res://) to a file path (removing res://)."""
-    return res_path[6:] if res_path.startswith("res://") else res_path
+    """Convert a Godot `res://` resource path to a safe filesystem-relative path.
+
+    Security rules:
+    - Accepts strings beginning with 'res://' or plain relative paths.
+    - Rejects any path that attempts to traverse above the resource root (leading '..').
+    - Collapses '.' and '..' segments safely. Raises RuntimeError on invalid traversal.
+
+    Returns a platform-native relative path (no leading slash).
+    """
+    if not res_path:
+        return ""
+
+    # strip prefix if present
+    if res_path.startswith("res://"):
+        rel = res_path[len("res://") :]
+    else:
+        rel = res_path
+
+    # unify separators and drop leading slashes
+    rel = rel.replace("\\", "/").lstrip("/")
+
+    # collapse segments while rejecting escapes that would pop past root
+    parts = []
+    for segment in rel.split("/"):
+        if segment == "" or segment == ".":
+            continue
+        if segment == "..":
+            if not parts:
+                # trying to escape above the res:// root
+                raise RuntimeError(f"Invalid resource path traversal: {res_path}")
+            parts.pop()
+            continue
+        parts.append(segment)
+
+    # return platform-native relative path
+    return os.path.join(*parts) if parts else ""
 
 
 def _realpath(path: str) -> str:
-    """Normalized absolute real path (resolves symlinks)."""
+    """Compatibility shim for older code.
+
+    Returns a normalized absolute path resolving symlinks. Implemented with
+    pathlib.Path.resolve(strict=False). This function is deprecated and kept
+    only for backward compatibility. New code should use Path(...).resolve().
+    """
     if path is None:
         return ""
-    return os.path.realpath(os.path.abspath(path))
+    # Use pathlib to canonicalize while allowing non-existent targets.
+    try:
+        return str(Path(path).resolve(strict=False))
+    except Exception:
+        # fallback to os.path behavior in case of unexpected errors
+        return os.path.realpath(os.path.abspath(path))
 
 
 def ensure_within(base: str, target: str):
     """
     Ensure `target` is within `base` after resolving symlinks.
     Raises RuntimeError on violation.
+
+    Uses Path.resolve(strict=False) so non-existent targets are still resolved
+    in a canonical manner where possible. Treats the base itself as allowed.
     """
     if not base:
         raise RuntimeError("ensure_within: base path empty")
-    base_r = _realpath(base)
-    targ_r = _realpath(target)
-    if not targ_r.startswith(base_r.rstrip(os.sep) + os.sep) and targ_r != base_r:
-        raise RuntimeError(f"Path escape detected. base={base_r} target={targ_r}")
+
+    # use pathlib resolve to canonicalize symlinks
+    base_p = Path(base).resolve(strict=False)
+    target_p = Path(target).resolve(strict=False)
+
+    # exact match is allowed
+    if target_p == base_p:
+        return True
+
+    base_str = str(base_p)
+    target_str = str(target_p)
+
+    # ensure trailing separator on base for prefix check
+    if not base_str.endswith(os.sep):
+        base_str = base_str + os.sep
+
+    if not target_str.startswith(base_str):
+        raise RuntimeError(f"Path escape detected. base={base_p} target={target_p}")
+
     return True
 
 
@@ -1757,7 +1818,7 @@ def patch_function(
         return log
 
 
-def patch_script_replace(
+def patch_file_replace(
     original_root: str, work_root: str, target_res: str, source_path: str
 ) -> List[str]:
     """Replaces the target file entirely with the source file."""
@@ -1845,7 +1906,7 @@ def run_patcher(
             if op == "FileReplace":
                 target_res, source_path = details
                 log.extend(
-                    patch_script_replace(
+                    patch_file_replace(
                         original_root, work_root, target_res, source_path
                     )
                 )
@@ -2460,7 +2521,7 @@ class _ToolTip:
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("GDScript Mod Loader & Patcher")
+        self.title("Godot Mod Overhaul System (GMOS)")
         self.geometry("1250x1000")
         # Apply a simple theme for the "START GAME" button accent
         style = ttk.Style(self)
@@ -3061,7 +3122,7 @@ class App(tk.Tk):
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         default_dir = os.path.join(os.path.expanduser("~"), "Documents")
         os.makedirs(default_dir, exist_ok=True)
-        default = os.path.join(default_dir, f"modloader_support_{ts}.zip")
+        default = os.path.join(default_dir, f"gmos_support_{ts}.zip")
         try:
             from tkinter import filedialog, messagebox
 
@@ -3077,9 +3138,9 @@ class App(tk.Tk):
         try:
             with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 # include main log
-                main_log = os.path.join(LOG_DIR, "modloader.log")
+                main_log = os.path.join(LOG_DIR, "gmos.log")
                 if os.path.exists(main_log):
-                    zf.write(main_log, os.path.join("logs", "modloader.log"))
+                    zf.write(main_log, os.path.join("logs", "gmos.log"))
 
                 # include any recent dryrun bundles (zip) from LOG_DIR
                 for fn in sorted(os.listdir(LOG_DIR)):
@@ -3698,7 +3759,7 @@ class App(tk.Tk):
             default_dir = os.path.join(os.path.expanduser("~"), "Documents")
             os.makedirs(default_dir, exist_ok=True)
             ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            default_name = f"modloader_diff_{ts}.patch"
+            default_name = f"gmos_diff_{ts}.patch"
             path = filedialog.asksaveasfilename(
                 defaultextension=".patch",
                 initialdir=default_dir,
@@ -3765,7 +3826,7 @@ def main_entry():
         # If this is a CLI invocation, print and exit nonzero. Otherwise show dialog.
         if len(sys.argv) > 1:
             print(
-                "Another Mod Loader instance is already running. Exiting.",
+                "Another GMOS instance is already running. Exiting.",
                 file=sys.stderr,
             )
             return 2
@@ -3775,11 +3836,11 @@ def main_entry():
 
                 messagebox.showerror(
                     "Already Running",
-                    "Another Mod Loader instance is already running. Close it and try again.",
+                    "Another GMOS instance is already running. Close it and try again.",
                 )
             except Exception:
                 print(
-                    "Another Mod Loader instance is already running. Exiting.",
+                    "Another GMOS instance is already running. Exiting.",
                     file=sys.stderr,
                 )
             return 2
@@ -3806,7 +3867,7 @@ def main_entry():
         try:
             messagebox.showerror(
                 "Startup Error",
-                f"Failed to start GUI. See log: {os.path.join(LOG_DIR, 'modloader.log')}\n\n{e}",
+                f"Failed to start GUI. See log: {os.path.join(LOG_DIR, 'gmos.log')}\n\n{e}",
             )
         except Exception:
             pass

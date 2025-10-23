@@ -1,4 +1,4 @@
-# Godot External Mod Loader
+# Godot Mod Overhaul System (GMOS)
 
 Small launcher-time tool. Produces a patched working copy of a Godot game so mods can overlay files and patches without modifying originals.
 

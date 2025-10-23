@@ -4,35 +4,52 @@ on:
   push:
   pull_request:
 
+env:
+  FORCE_COLOR: 1
+  PYTHONUNBUFFERED: 1
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.x]
-
+        python-version: ["3.x"]
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 1
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
-
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements-dev.txt') }}
-
+          cache: "pip"
       - name: Install
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
           pip install -e .
-
       - name: Lint
-        run: flake8 .
-
+        run: |
+          ruff check .
+          flake8 .
       - name: Run tests
         run: pytest -q
+      - name: Build binary
+        run: pyinstaller packaging/gmos.spec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gmos-binary
+          path: dist/gmos*
+
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+      - name: Install Bandit
+        run: pip install bandit
+      - name: Run Bandit
+        run: bandit -q -r .

@@ -1,2 +1,7 @@
 flake8
 pytest
+ruff
+isort
+black
+bandit
+pyinstaller

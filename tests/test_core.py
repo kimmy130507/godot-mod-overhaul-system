@@ -4,7 +4,7 @@ import time
 import pytest
 
 # import functions under test
-from mod_loader import (
+from gmos import (
     acquire_app_lock,
     acquire_workroot_lock,
     atomic_write_bytes,
