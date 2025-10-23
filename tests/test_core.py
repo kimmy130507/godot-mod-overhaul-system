@@ -51,7 +51,7 @@ def test_ensure_within(tmp_path):
 
 
 def test_file_lock_acquire_and_release(tmp_path):
-    lock_path = str(tmp_path / "testmodloader.lock")
+    lock_path = str(tmp_path / "testgmos.lock")
     # acquire
     ok = acquire_app_lock(lock_path)
     assert ok is True
@@ -77,8 +77,8 @@ def test_acquire_workroot_lock_and_release(tmp_path):
     ok = acquire_workroot_lock(wr)
     assert ok is True
     # check for common lock artifacts but accept platform variance
-    lockfile = os.path.join(wr, ".modloader.lock")
-    sockfile = os.path.join(wr, ".modloader.sock")
+    lockfile = os.path.join(wr, ".gmos.lock")
+    sockfile = os.path.join(wr, ".gmos.sock")
     # either a platform lock exists OR a lock file exists. We simply assert we can release.
     release_app_lock()
     release_platform_lock()

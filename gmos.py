@@ -8,12 +8,13 @@ import json
 import logging
 import logging.handlers
 import os
-import random
+import shlex
+import secrets
 import re
 import shutil
 import socket
 import stat
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 import time
@@ -76,11 +77,47 @@ def _excepthook(exc_type, exc, tb):
         messagebox.showerror(
             "Fatal Error", "An unexpected error occurred. See logs/gmos.log"
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("ignored exception: %s", e)
 
 
 sys.excepthook = _excepthook
+
+
+def _safe_spawn(command, cwd=None):
+    """Safely spawn an external command.
+
+    - Accepts a string or list. If string, splits with shlex.
+    - Locates executable with shutil.which when not absolute.
+    - Always spawns without a shell, closes fds and silences stdio by default.
+    - Raises RuntimeError when the executable cannot be located or command empty.
+    """
+    if isinstance(command, str):
+        cmd = shlex.split(command)
+    else:
+        cmd = list(command)
+
+    if not cmd:
+        raise RuntimeError("Empty command")
+
+    exe = cmd[0]
+    if not os.path.isabs(exe):
+        exe_path = shutil.which(exe, path=os.environ.get("PATH"))
+    else:
+        exe_path = exe if os.path.exists(exe) else None
+
+    if exe_path is None:
+        raise RuntimeError(f"Cannot locate executable: {exe}")
+
+    return _safe_spawn(
+        [exe_path] + cmd[1:],
+        cwd=cwd,
+        close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
 
 # ----------------- single-instance lock helpers ---------------------------
 LOCK_FD = None
@@ -132,10 +169,10 @@ def _release_file_lock(fd):
             try:
                 fd.seek(0)
                 msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
+    except Exception as e:
+        logger.debug("ignored exception: %s", e)
 
 
 def try_acquire_lock_fd(lock_path: str):
@@ -153,8 +190,8 @@ def try_acquire_lock_fd(lock_path: str):
         except Exception:
             try:
                 fd.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
             return None
     except Exception:
         return None
@@ -180,8 +217,8 @@ def acquire_app_lock(lock_path: str = LOCK_PATH, retry_once: bool = True) -> boo
             fd.write(pid_bytes)
             fd.flush()
             os.fsync(fd.fileno())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         # adopt as our lock descriptor (no flock needed; creation is atomic)
         LOCK_FD = fd
         CURRENT_LOCK_PATH = os.path.realpath(lock_path)
@@ -189,7 +226,9 @@ def acquire_app_lock(lock_path: str = LOCK_PATH, retry_once: bool = True) -> boo
         return True
     except FileExistsError:
         # another process created the file concurrently. Fall back to flock path.
-        pass
+        logger.debug(
+            "concurrent file create detected while creating lock file (ignored)"
+        )
     except Exception:
         # If atomic create fails for another reason, fall back as well.
         logger.exception(
@@ -214,28 +253,28 @@ def acquire_app_lock(lock_path: str = LOCK_PATH, retry_once: bool = True) -> boo
             if owner_pid and _pid_running(owner_pid):
                 try:
                     fd.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("ignored exception: %s", e)
                 return False
             if owner_pid is None:
                 try:
                     fd.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("ignored exception: %s", e)
                 return False
             if retry_once:
                 try:
                     fd.close()
                     os.remove(lock_path)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("ignored exception: %s", e)
                 time.sleep(0.05)
                 return acquire_app_lock(lock_path, retry_once=False)
             else:
                 try:
                     fd.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("ignored exception: %s", e)
                 return False
 
         # we hold the flock; write our PID (truncate + write)
@@ -246,22 +285,21 @@ def acquire_app_lock(lock_path: str = LOCK_PATH, retry_once: bool = True) -> boo
             fd.write(pid_bytes)
             fd.flush()
             os.fsync(fd.fileno())
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         LOCK_FD = fd
         atexit.register(release_app_lock)
         try:
             CURRENT_LOCK_PATH = os.path.realpath(lock_path)
-        except Exception:
+        except Exception as e:
             CURRENT_LOCK_PATH = lock_path
-            pass
+            logger.debug("failed to set CURRENT_LOCK_PATH to %s: %s", lock_path, e)
         return True
     except Exception:
         try:
             fd.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         return False
 
 
@@ -274,20 +312,19 @@ def release_app_lock():
         if LOCK_FD:
             try:
                 _release_file_lock(LOCK_FD)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
             try:
                 LOCK_FD.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
             LOCK_FD = None
 
         # release any platform-native lock
         try:
             release_platform_lock()
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         # If the lock file exists read it directly and act if it contains our PID.
         try:
             if os.path.exists(lockfpath):
@@ -305,22 +342,21 @@ def release_app_lock():
                             fh.flush()
                             try:
                                 os.fsync(fh.fileno())
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
+                            except Exception as e:
+                                logger.debug("ignored exception: %s", e)
+                    except Exception as e:
+                        logger.debug("ignored exception: %s", e)
                     try:
                         os.remove(lockfpath)
-                    except Exception:
-                        # final best-effort: ignore failures
-                        pass
-        except Exception:
-            pass
+                    except Exception as e:
+                        logger.debug("ignored exception: %s", e)
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
     finally:
         try:
             CURRENT_LOCK_PATH = None
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
 
 
 def acquire_workroot_lock(work_root: str) -> bool:
@@ -340,8 +376,8 @@ def acquire_workroot_lock(work_root: str) -> bool:
             try:
                 global CURRENT_LOCK_PATH
                 CURRENT_LOCK_PATH = os.path.join(wr, ".gmos.lock")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
             atexit.register(release_platform_lock)
             return True
     except Exception:
@@ -375,9 +411,8 @@ def wire_workroot_locking(app):
                     rp = os.path.realpath(new_wr)
                     if CURRENT_LOCK_PATH and os.path.realpath(CURRENT_LOCK_PATH) == rp:
                         return
-                except Exception:
-                    pass
-
+                except Exception as e:
+                    logger.debug("ignored exception: %s", e)
                 # Prepare new lock path and attempt to acquire it with short retries
                 new_lock_path = os.path.join(os.path.realpath(new_wr), ".gmos.lock")
                 fd_new = None
@@ -402,16 +437,16 @@ def wire_workroot_locking(app):
                             "Another instance may be running for that work root.\n"
                             "This instance will now exit.",
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("ignored exception: %s", e)
                     try:
                         # Close GUI after dialog
                         app.after(0, app.destroy)
                     except Exception:
                         try:
                             sys.exit(2)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("ignored exception: %s", e)
                     return
 
                 # We successfully locked the new workroot file. Write our PID to it.
@@ -422,9 +457,8 @@ def wire_workroot_locking(app):
                     fd_new.write(pid_bytes)
                     fd_new.flush()
                     os.fsync(fd_new.fileno())
-                except Exception:
-                    pass
-
+                except Exception as e:
+                    logger.debug("ignored exception: %s", e)
                 # Remember old lock path so we can remove it after switching
                 old_lock_path = None
                 try:
@@ -450,8 +484,8 @@ def wire_workroot_locking(app):
                     CURRENT_LOCK_PATH = os.path.realpath(new_lock_path)
                     try:
                         atexit.register(release_app_lock)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("ignored exception: %s", e)
                     app.append_log(f"Acquired workroot lock: {new_wr}")
 
                     # attempt best-effort removal of the old lock file
@@ -467,19 +501,18 @@ def wire_workroot_locking(app):
                                 logger.exception(
                                     "Failed removing old lock file: %s", old_lock_path
                                 )
-                    except Exception:
-                        pass
-
+                    except Exception as e:
+                        logger.debug("ignored exception: %s", e)
                 except Exception:
                     # Fallback: ensure we release platform lock we just created, then close fd_new
                     try:
                         release_platform_lock()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("ignored exception: %s", e)
                     try:
                         fd_new.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("ignored exception: %s", e)
                     try:
                         acquire_app_lock()
                     except Exception:
@@ -530,8 +563,8 @@ def _try_windows_mutex(name: str):
             # somebody else already has/created it
             try:
                 kernel32.CloseHandle(h)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
             return None
         return ("win_mutex", h, kernel32)
     except Exception:
@@ -543,8 +576,8 @@ def _release_windows_mutex(handle_tuple):
         _, h, kernel32 = handle_tuple
         kernel32.ReleaseMutex(h)
         kernel32.CloseHandle(h)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("ignored exception: %s", e)
 
 
 # ---------- Unix AF_UNIX socket ----------
@@ -558,15 +591,15 @@ def _try_unix_socket(sock_path: str):
         if os.path.exists(sock_path):
             try:
                 os.unlink(sock_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
         s.bind(sock_path)
         return ("unix_sock", s, sock_path)
     except Exception:
         try:
             s.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         return None
 
 
@@ -577,10 +610,10 @@ def _release_unix_socket(handle_tuple):
         try:
             if os.path.exists(path):
                 os.unlink(path)
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
+    except Exception as e:
+        logger.debug("ignored exception: %s", e)
 
 
 # ---------- TCP bind fallback ----------
@@ -596,8 +629,8 @@ def _try_tcp_port_from_hash(workroot: str):
     except Exception:
         try:
             s.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         return None
 
 
@@ -605,8 +638,8 @@ def _release_tcp(handle_tuple):
     try:
         _, s, _ = handle_tuple
         s.close()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("ignored exception: %s", e)
 
 
 # ---------- Platform lock orchestrator ----------
@@ -652,8 +685,8 @@ def release_platform_lock():
             _release_unix_socket(payload)
         elif kind == "tcp":
             _release_tcp(payload)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("ignored exception: %s", e)
     _PLATFORM_HANDLE = None
 
 
@@ -1349,8 +1382,8 @@ def atomic_write_bytes(dst_path: str, bdata: bytes, *, mode: int = 0o644):
         if os.path.exists(tmp):
             try:
                 os.remove(tmp)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
 
 
 def atomic_write_copy(src_path: str, dst_path: str):
@@ -1370,15 +1403,15 @@ def atomic_write_copy(src_path: str, dst_path: str):
         try:
             st = os.stat(src_path)
             os.chmod(tmp, stat.S_IMODE(st.st_mode))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         os.replace(tmp, dst_path)
     finally:
         if os.path.exists(tmp):
             try:
                 os.remove(tmp)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
 
 
 def read_source_for_patching(work_path):
@@ -1419,9 +1452,8 @@ def atomic_write_with_backup(target_path, new_text):
             if os.path.exists(tmp_bak):
                 try:
                     os.remove(tmp_bak)
-                except Exception:
-                    pass
-
+                except Exception as e:
+                    logger.debug("ignored exception: %s", e)
     # Now write new content atomically to target
     tmp_fd, tmp_path = tempfile.mkstemp(dir=str(p.parent))
     try:
@@ -1432,8 +1464,8 @@ def atomic_write_with_backup(target_path, new_text):
         if os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
 
 
 def atomic_replace(target_path, text):
@@ -1884,8 +1916,8 @@ def run_patcher(
             if bak_path.exists():
                 try:
                     bak_path.unlink()
-                except OSError:
-                    pass  # Less critical if backup fails to delete
+                except OSError as e:
+                    logger.debug("failed to remove backup file %s: %s", bak_path, e)
 
     applied_files = set()
     applied_ops = []
@@ -2054,9 +2086,8 @@ def run_patcher(
         atomic_replace(
             log_path, log_content
         )  # Use replace instead of append for clean log
-    except Exception:
-        pass
-
+    except Exception as e:
+        logger.debug("ignored exception: %s", e)
     # runtime manifest (structured)
     try:
         manifest_path = os.path.join(work_root, "runtime_manifest.json")
@@ -2104,8 +2135,13 @@ def analyze_mods_for_conflicts(
     for mod in mod_configs:
         try:
             all_instructions.extend(generate_patch_plan(mod["Path"], mod))
-        except Exception:
-            # skip malformed mod during conflict analysis; the UI should mark it invalid earlier
+        except Exception as e:
+            # skip malformed mod during conflict analysis; preserve trace for audits
+            logger.debug(
+                "Skipping malformed mod during conflict analysis: %s (%s)",
+                mod.get("Name", mod.get("Path")),
+                e,
+            )
             continue
 
     for mod_name, op, details in all_instructions:
@@ -2124,7 +2160,8 @@ def analyze_mods_for_conflicts(
             try:
                 t_res = details[0]
                 key = f"Other::{t_res}"
-            except Exception:
+            except Exception as e:
+                logger.debug("Conflict-key generation failed for %s: %s", t_res, e)
                 continue
 
         targets.setdefault(key, []).append((mod_name, op, details))
@@ -2378,8 +2415,8 @@ class ResolveDialog(simpledialog.Dialog):
                 import webbrowser
 
                 webbrowser.open(mod["Path"])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
 
     def _toggle_selected_mod(self, listbox):
         sel = listbox.curselection()
@@ -2400,9 +2437,8 @@ class ResolveDialog(simpledialog.Dialog):
             label = f"{mod_name}  [{'DISABLED' if not mod['Enabled'] else 'ENABLED'}]"
             listbox.delete(idx)
             listbox.insert(idx, label)
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         # Update main app state in-place without closing the dialog
         try:
             parent_app = self.master  # the App instance
@@ -2412,9 +2448,8 @@ class ResolveDialog(simpledialog.Dialog):
                     break
             parent_app.update_patch_instructions()
             parent_app.update_conflict_status()
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         # keep dialog open so user can toggle multiple mods
         self.master.focus_force()
 
@@ -2429,8 +2464,8 @@ class ResolveDialog(simpledialog.Dialog):
             self.master.focus_force()
             self.resolve_callback_select = mod_name
             self.apply()  # will close dialog and let parent handle selection
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
 
     def apply_mod_order_to_configs(self):
         """Updates self.mod_configs based on the listbox order."""
@@ -2465,8 +2500,8 @@ class ResolveDialog(simpledialog.Dialog):
         # call parent callback
         try:
             self.resolve_callback(new_mod_configs)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
 
 
 # ---------------------- Tooltip ----------------------
@@ -2494,8 +2529,8 @@ class _ToolTip:
         if self.tw:
             try:
                 self.tw.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
             self.tw = None
 
     def _show(self):
@@ -2828,8 +2863,8 @@ class App(tk.Tk):
                 self.mod_list_box.itemconfig(idx, fg="gray")
             else:
                 self.mod_list_box.itemconfig(idx, fg="black")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         self.update_patch_instructions()
         self.update_conflict_status()
         self.append_log(
@@ -2908,9 +2943,8 @@ class App(tk.Tk):
             if not mod.get("Enabled", True):
                 try:
                     self.mod_list_box.itemconfig(tk.END, fg="gray")
-                except Exception:
-                    pass
-
+                except Exception as e:
+                    logger.debug("ignored exception: %s", e)
         # Rebuild instructions from only valid mods
         self.update_patch_instructions()
 
@@ -2939,9 +2973,8 @@ class App(tk.Tk):
         """
         try:
             self.append_log("Rollback: invoked")
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         work_root = (
             safe_norm(self.vars["work_root_dir"].get())
             if "work_root_dir" in self.vars
@@ -2951,8 +2984,8 @@ class App(tk.Tk):
             messagebox.showinfo("Rollback", f"No working directory found: {work_root}")
             try:
                 self.append_log(f"Rollback: no work_root or missing dir: {work_root}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
             return
 
         # Gather bak files (relative)
@@ -2968,15 +3001,14 @@ class App(tk.Tk):
             messagebox.showerror("Rollback Error", f"Failed scanning work_root: {e}")
             try:
                 self.append_log(f"Rollback error scanning work_root: {e}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
             return
 
         try:
             self.append_log(f"Rollback: found {len(bak_list)} .bak files")
-        except Exception:
-            pass
-
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         if not bak_list:
             resp = messagebox.askyesno(
                 "Rollback", "No .bak files found. Remove entire working directory?"
@@ -3003,15 +3035,15 @@ class App(tk.Tk):
             try:
                 preview.attributes("-topmost", True)
                 preview.after(200, lambda: preview.attributes("-topmost", False))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
         except Exception as e:
             # If Toplevel creation fails we must show the error and log it
             messagebox.showerror("Rollback Error", f"Cannot create preview window: {e}")
             try:
                 self.append_log(f"Rollback error creating preview window: {e}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
             return
 
         lbl = tk.Label(
@@ -3108,8 +3140,8 @@ class App(tk.Tk):
         # final trace entry
         try:
             self.append_log("Rollback: preview window shown")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
 
     def create_support_bundle(self):
         """Create a support zip containing logs and runtime_manifest from work_root (if present)."""
@@ -3175,8 +3207,8 @@ class App(tk.Tk):
                 messagebox.showerror(
                     "Support Bundle Error", f"Failed to create bundle: {e}"
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
 
     def export_mod_order(self):
         """Export the current mod order (names and enabled flags) to a JSON file."""
@@ -3350,8 +3382,8 @@ class App(tk.Tk):
                     self.mod_list_box.selection_set(idx)
                     self.mod_list_box.see(idx)
                     self.mod_list_box.focus_set()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("ignored exception: %s", e)
                 return
         self.append_log(f"Select failed. Mod not found: {mod_name}")
 
@@ -3380,8 +3412,8 @@ class App(tk.Tk):
                 self.mod_list_box.itemconfig(
                     idx, fg="gray" if not mod["Enabled"] else "black"
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
             self.mod_list_box.selection_set(idx)
             self.append_log(
                 f"Mod '{mod.get('Name')}' {'enabled' if mod['Enabled'] else 'disabled'}."
@@ -3501,9 +3533,35 @@ class App(tk.Tk):
         self.append_log(f"Working Directory & Resource Path: {work_root}")
 
         try:
-            # --- FIX: The Current Working Directory (cwd) MUST be the work_root ---
-            # This ensures the executable finds its dependencies (like the .pck file).
-            subprocess.Popen(command, cwd=work_root)
+            # Ensure command is a list and safely locate the executable.
+            if isinstance(command, str):
+                # split a command string into argv safely
+                command_list = shlex.split(command)
+            else:
+                # assume it's an iterable of argv elements
+                command_list = list(command)
+
+            if not command_list:
+                raise RuntimeError("Empty launch command.")
+
+            # Try to resolve executable path safely. Prefer an exact path or look on PATH.
+            exe = command_list[0]
+            exe_path = exe
+            if not os.path.isabs(exe):
+                exe_path = shutil.which(exe, path=os.environ.get("PATH"))
+            if exe_path is None:
+                raise RuntimeError(f"Cannot locate executable: {exe}")
+
+            # Launch without a shell. Close file descriptors and drop IO to avoid leaking handles.
+            _safe_spawn(
+                [exe_path] + command_list[1:],
+                cwd=work_root,
+                close_fds=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            _safe_spawn(command, cwd=work_root)
             self.append_log("SUCCESS: Game launched from the modded directory.")
         except Exception as e:
             messagebox.showerror("Launch Error", f"Failed to launch game:\n{e}")
@@ -3545,7 +3603,10 @@ class App(tk.Tk):
                     tr = details[0] if details else None
                 if tr:
                     touched_by[_res_to_path(tr)].add(mod_name)
-            except Exception:
+            except Exception as e:
+                logger.debug(
+                    "Failed to register touch for %s by %s: %s", tr, mod_name, e
+                )
                 continue
 
         # Run simulation
@@ -3778,8 +3839,8 @@ class App(tk.Tk):
             logger.exception("save_diff_to_file failed: %s", e)
             try:
                 messagebox.showerror("Save Diff Error", f"Failed to save diff: {e}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("ignored exception: %s", e)
 
     def view_runtime_manifest(self):
         """Open runtime_manifest.json from work_root in system viewer or show an error."""
@@ -3820,7 +3881,7 @@ def main_entry():
         if got_lock:
             break
         # small randomized sleep to avoid synchronized retries across processes
-        time.sleep(0.03 + random.random() * 0.12)
+        time.sleep(0.03 + (secrets.randbelow(1000) / 1000.0) * 0.12)
 
     if not got_lock:
         # If this is a CLI invocation, print and exit nonzero. Otherwise show dialog.
@@ -3869,8 +3930,8 @@ def main_entry():
                 "Startup Error",
                 f"Failed to start GUI. See log: {os.path.join(LOG_DIR, 'gmos.log')}\n\n{e}",
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("ignored exception: %s", e)
         return 1
 
 
