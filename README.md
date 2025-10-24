@@ -30,3 +30,8 @@ pip install -e .
 ## Troubleshooting
 
 If a mod is invalid the loader marks it `[INVALID]` and skips it. Use `Simulate & Diff` to inspect errors.
+
+## License
+GMOS (Godot Mod Overhaul System) is licensed under the GNU General Public License v3.
+This license applies only to the GMOS tool and its source code.
+Mods and content created for use with GMOS may use any license chosen by their authors.

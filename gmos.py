@@ -1,5 +1,24 @@
+# GMOS - Godot Mod Overhaul System
+# Copyright (C) 2025 Kim
+#
+# This file is part of GMOS.
+#
+# GMOS is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# GMOS is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with GMOS.  If not, see <https://www.gnu.org/licenses/>.
+
 import argparse
 import atexit
+import configparser
 import datetime
 import difflib
 import errno
@@ -8,9 +27,9 @@ import json
 import logging
 import logging.handlers
 import os
-import shlex
-import secrets
 import re
+import secrets
+import shlex
 import shutil
 import socket
 import stat
@@ -24,7 +43,7 @@ import zipfile
 from collections import defaultdict
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 try:
     import fcntl
@@ -109,7 +128,7 @@ def _safe_spawn(command, cwd=None):
     if exe_path is None:
         raise RuntimeError(f"Cannot locate executable: {exe}")
 
-    return _safe_spawn(
+    return subprocess.Popen(
         [exe_path] + cmd[1:],
         cwd=cwd,
         close_fds=True,
@@ -117,6 +136,400 @@ def _safe_spawn(command, cwd=None):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+
+# ----------------------------
+# Config / First-run setup
+# ----------------------------
+
+
+def _get_user_config_dir(appname: str = "gmos") -> str:
+    """Return platform-appropriate config directory for storing settings."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.path.expanduser(r"~\AppData\Roaming")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, appname)
+
+
+def get_config_path(config_dir: Optional[str] = None) -> str:
+    """Return full path to config.json. Accept override for tests."""
+    cfgdir = config_dir or _get_user_config_dir()
+    return os.path.join(cfgdir, "config.json")
+
+
+def load_config(path: Optional[str] = None) -> Dict[str, Any]:
+    """Load JSON config. Returns {} when file missing or invalid."""
+    p = path or get_config_path()
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def write_config(cfg: Dict[str, Any], path: Optional[str] = None) -> None:
+    """Write JSON config, creating parent directory as needed."""
+    p = path or get_config_path()
+    d = os.path.dirname(p)
+    os.makedirs(d, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+
+class SetupWizard(tk.Toplevel):
+    """Simple modal setup wizard for first-run configuration."""
+
+    def __init__(self, parent, config_path: Optional[str] = None):
+        super().__init__(parent)
+        self.parent = parent
+        self.config_path = config_path or get_config_path()
+        self.result: Optional[Dict[str, Any]] = None
+        self.title("GMOS Setup")
+        self.resizable(False, False)
+
+        frm = tk.Frame(self, padx=12, pady=12)
+        frm.pack(fill="both", expand=True)
+
+        tk.Label(frm, text="Game executable:").grid(row=0, column=0, sticky="w")
+        self.exe_var = tk.StringVar()
+        tk.Entry(frm, textvariable=self.exe_var, width=60).grid(
+            row=1, column=0, columnspan=2, sticky="we", pady=(0, 6)
+        )
+        tk.Button(frm, text="Browse", command=self._choose_exe).grid(
+            row=1, column=2, padx=(6, 0)
+        )
+
+        tk.Label(frm, text="Work root (game mod folder):").grid(
+            row=2, column=0, sticky="w"
+        )
+        self.work_var = tk.StringVar()
+        tk.Entry(frm, textvariable=self.work_var, width=60).grid(
+            row=3, column=0, columnspan=2, sticky="we", pady=(0, 6)
+        )
+        tk.Button(frm, text="Browse", command=self._choose_work).grid(
+            row=3, column=2, padx=(6, 0)
+        )
+
+        btn_frame = tk.Frame(frm)
+        btn_frame.grid(row=4, column=0, columnspan=3, pady=(8, 0))
+        tk.Button(btn_frame, text="Cancel", command=self._on_cancel).pack(
+            side="right", padx=4
+        )
+        tk.Button(btn_frame, text="OK", command=self._on_ok).pack(side="right")
+
+        # center on parent
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.wait_window(self)
+
+    def _choose_exe(self):
+        p = filedialog.askopenfilename(title="Select game executable")
+        if p:
+            self.exe_var.set(p)
+            # suggest a default work root near the executable if none set yet
+            if not self.work_var.get().strip():
+                self.work_var.set(suggest_work_root(p))
+
+    def _choose_work(self):
+        p = filedialog.askdirectory(title="Select game work root")
+        if p:
+            self.work_var.set(p)
+
+    def _on_cancel(self):
+        self.result = None
+        self.destroy()
+
+    def _on_ok(self):
+        exe = self.exe_var.get().strip()
+        wr = self.work_var.get().strip()
+        if not wr:
+            messagebox.showerror("Invalid", "Please select a work root folder.")
+            return
+        # create work_root if it doesn't exist
+        try:
+            os.makedirs(wr, exist_ok=True)
+        except Exception as e:
+            messagebox.showerror(
+                "Folder Error", f"Failed to create or access work root:\n{e}"
+            )
+            return
+        # optional sanity: ensure it's a directory and writable
+        if not os.path.isdir(wr) or not os.access(wr, os.W_OK):
+            messagebox.showerror(
+                "Folder Error", "Work root must be a writable directory."
+            )
+            return
+
+        # warn but allow non-existing exe (user may install later)
+        if exe and not os.path.exists(exe):
+            if not messagebox.askyesno(
+                "Executable missing",
+                f"The executable does not exist:\n{exe}\nProceed anyway?",
+            ):
+                return
+        cfg = {"game_exe": exe, "work_root": wr}
+        try:
+            write_config(cfg, self.config_path)
+            self.result = cfg
+            self.destroy()
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Failed to save configuration: {e}")
+
+
+def suggest_work_root(exe_path: str) -> str:
+    """
+    Return a suggested work_root given a chosen game executable path.
+    Current policy: suggest a 'mods' directory next to the executable.
+    """
+    if not exe_path:
+        return os.path.join(os.path.expanduser("~"), "mods")
+    exe_dir = os.path.dirname(exe_path)
+    if not exe_dir:
+        exe_dir = os.path.expanduser("~")
+    return os.path.join(exe_dir, "mods")
+
+
+def ensure_config(
+    config_path: Optional[str] = None,
+    headless_defaults: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Ensure a configuration exists. If not present:
+      - if headless_defaults provided, write them and return
+      - otherwise show the GUI SetupWizard and return the resulting config or {}
+    """
+    p = config_path or get_config_path()
+    cfg = load_config(p)
+    if cfg:
+        return cfg
+    if headless_defaults is not None:
+        write_config(headless_defaults, p)
+        return headless_defaults
+    # show GUI wizard (require a root if none exists)
+    root = None
+    created_root = False
+    try:
+        if not tk._default_root:
+            root = tk.Tk()
+            root.withdraw()
+            created_root = True
+        else:
+            root = tk._default_root
+    except Exception:
+        # fallback: create ephemeral root
+        root = tk.Tk()
+        root.withdraw()
+        created_root = True
+
+    wiz = SetupWizard(root, config_path=p)
+    res = wiz.result or {}
+    if created_root:
+        try:
+            root.destroy()
+        except Exception:
+            pass
+    return res
+
+
+def _get_mod_name_from_config(mod_config: Dict[str, Any]) -> str:
+    """Determine mod name. Prefer Metadata 'Name' then folder basename."""
+    # try metadata section lines like "Name = value"
+    sections = mod_config.get("Sections", {}) or {}
+    # case-insensitive lookup
+    for sec_k in sections.keys():
+        if sec_k.lower() == "metadata":
+            for line in sections[sec_k]:
+                try:
+                    k, v = [p.strip() for p in line.split("=", 1)]
+                except Exception:
+                    continue
+                if k.lower() == "name" and v:
+                    return v
+    # fallback to folder name of the mod path
+    path = mod_config.get("Path", "") or ""
+    return os.path.basename(path) or path
+
+
+def _parse_dependencies_from_config(mod_config: Dict[str, Any]) -> Set[str]:
+    """Return a set of dependency names declared by this mod config."""
+    deps: Set[str] = set()
+    sections = mod_config.get("Sections", {}) or {}
+    for sec_k in sections.keys():
+        if sec_k.lower() == "dependencies":
+            for line in sections[sec_k]:
+                try:
+                    _, val = [p.strip() for p in line.split("=", 1)]
+                except Exception:
+                    val = line.strip()
+                for part in (p.strip() for p in val.split(",") if p.strip()):
+                    if part:
+                        deps.add(part)
+    return deps
+
+
+def resolve_mod_dependencies(
+    mod_configs: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
+    """
+    Topologically sort mods by declared dependencies.
+
+    Returns (ordered_mod_configs, errors_dict)
+    - ordered_mod_configs: list in load order (deps first). If cycles exist the
+      returned list will be partial (nodes outside cycles).
+    - errors_dict: mapping mod_name -> list[str] of error messages (missing deps or cycle)
+    """
+    # map name -> config
+    name_to_cfg: Dict[str, Dict[str, Any]] = {}
+    for cfg in mod_configs:
+        name = _get_mod_name_from_config(cfg)
+        name_to_cfg[name] = cfg
+
+    # build adjacency: dep -> set(dependents)
+    adj: Dict[str, Set[str]] = {n: set() for n in name_to_cfg}
+    # track missing deps
+    errors: Dict[str, List[str]] = {}
+    deps_of: Dict[str, Set[str]] = {}
+
+    for name, cfg in name_to_cfg.items():
+        deps = _parse_dependencies_from_config(cfg)
+        deps_of[name] = deps
+        for d in deps:
+            if d not in name_to_cfg:
+                errors.setdefault(name, []).append(f"missing dependency: {d}")
+            else:
+                adj[d].add(name)
+
+    # Kahn's algorithm for topological sort
+    # compute in-degree
+    indeg: Dict[str, int] = {n: 0 for n in name_to_cfg}
+    for src, targets in adj.items():
+        for t in targets:
+            indeg[t] += 1
+
+    queue = [n for n, d in indeg.items() if d == 0]
+    order: List[str] = []
+    while queue:
+        n = queue.pop(0)
+        order.append(n)
+        for m in sorted(adj.get(n, [])):
+            indeg[m] -= 1
+            if indeg[m] == 0:
+                queue.append(m)
+
+    # detect cycles (nodes not in order and not already errored for missing deps)
+    remaining = [n for n in name_to_cfg.keys() if n not in order]
+    if remaining:
+        # find strongly connected components minimal reporter: list remaining as cycle nodes
+        for n in remaining:
+            errors.setdefault(n, []).append(
+                f"dependency cycle detected (involving: {', '.join(sorted(remaining))})"
+            )
+
+    # produce ordered configs for nodes in order
+    ordered_cfgs = [name_to_cfg[n] for n in order if n in name_to_cfg]
+    return ordered_cfgs, errors
+
+
+def apply_dependency_resolution(
+    mod_configs: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
+    """
+    Annotate mod_configs with dependency resolution results.
+
+    Adds per-config keys:
+      - '_deps_errors': list[str] of human messages (missing deps, cycles)
+      - '_resolved_order_rank': int (0-based) if placed in topo order
+
+    Returns (ordered_configs, errors_dict) where ordered_configs is the list
+    sorted in load order (dependencies first). Mods involved in cycles or with missing
+    deps may be missing a rank and will be placed after resolved mods.
+    """
+    ordered, errors = resolve_mod_dependencies(mod_configs)
+
+    # clear previous annotations
+    for cfg in mod_configs:
+        cfg.pop("_deps_errors", None)
+        cfg.pop("_resolved_order_rank", None)
+
+    # assign ranks for ordered mods
+    rank = 0
+    for cfg in ordered:
+        name = _get_mod_name_from_config(cfg)
+        cfg["_resolved_order_rank"] = rank
+        rank += 1
+
+    # attach errors from resolver to original configs
+    for name, errs in errors.items():
+        # find matching config by name and set _deps_errors
+        for cfg in mod_configs:
+            if _get_mod_name_from_config(cfg) == name:
+                cfg["_deps_errors"] = list(errs)
+                break
+
+    # place unresolved configs (cycles/missing deps) after resolved ones, preserve relative order
+    def _sort_key(cfg):
+        r = cfg.get("_resolved_order_rank")
+        if r is None:
+            # place after resolved; keep stable order by mod folder name
+            return (1, _get_mod_name_from_config(cfg).lower())
+        return (0, r)
+
+    ordered_all = sorted(mod_configs, key=_sort_key)
+    return ordered_all, errors
+
+
+def rebuild_mod_listbox_from_configs(
+    listbox, mod_configs: List[Dict[str, Any]], name_getter=_get_mod_name_from_config
+):
+    """
+    Utility to rebuild a Tk Listbox (or similar widget) showing mods according to resolved order.
+
+    - listbox: a Tkinter Listbox, or any object implementing delete(0,END) and insert(idx, text) and itemconfig.
+    - mod_configs: list of mod config dicts (will be sorted by _resolved_order_rank if present).
+    - name_getter: function(cfg) -> display name.
+
+    Behavior:
+    - Resolved mods appear first.
+    - Mods with dependency errors are marked with ' [INVALID]' and colored red.
+    - Mods that are disabled (if they have key 'Enabled' == False) are dimmed (gray).
+    """
+    try:
+        # Clear listbox
+        listbox.delete(0, "end")
+    except Exception:
+        # not a real listbox; caller may handle UI insertion differently
+        return
+
+    for cfg in mod_configs:
+        name = name_getter(cfg)
+        label = name
+        is_invalid = bool(cfg.get("_deps_errors"))
+        if is_invalid:
+            label = f"{label} [INVALID]"
+        # detect disabled flag conventionally stored as Enabled or enabled
+        enabled = cfg.get("Enabled")
+        if enabled is None:
+            # try lowercase key in sections metadata if present
+            enabled = cfg.get("enabled", True)
+
+        idx = listbox.size()
+        listbox.insert(idx, label)
+        try:
+            if not enabled:
+                listbox.itemconfig(idx, fg="gray")
+            elif is_invalid:
+                listbox.itemconfig(idx, fg="red")
+        except Exception:
+            # some listbox implementations don't support itemconfig; ignore
+            pass
+
+        # attach tooltip text in cfg for UI to consume if desired
+        if is_invalid:
+            cfg["_deps_tooltip"] = "\n".join(cfg.get("_deps_errors", []))
+        else:
+            cfg.pop("_deps_tooltip", None)
 
 
 # ----------------- single-instance lock helpers ---------------------------
@@ -693,6 +1106,7 @@ def release_platform_lock():
 # ---------------------------------------------------------------------------
 
 
+# Utility function for PyInstaller/frozen builds
 def resource_path(rel_path):
     """Return absolute path to resource, whether frozen or not."""
     if getattr(sys, "frozen", False):
@@ -1148,82 +1562,185 @@ def generate_patch_plan(
     return plan
 
 
-def validate_mod_config(mod_config: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+def _validate_mod_config_dict(mod_config: Dict[str, Any]) -> List[str]:
     """
-    Validate parsed mod config. Returns (True, None) or (False, "error message").
-    This checks:
-      - manifest syntax (modes present)
-      - referenced source files exist inside the mod folder
-      - replacement rename attempts (replace mode) are rejected
+    Validate the provided mod_config dict.
+    Returns a list of error strings (empty if no errors).
+    This is a helper used by validate_mod_config which dispatches based on
+    whether the caller passed a .mos path (string) or a parsed dict.
     """
+    errors: List[str] = []
     try:
         mod_path = mod_config.get("Path", "")
-        sections = mod_config.get("Sections", {}) or {}
+        raw_sections = mod_config.get("Sections", {}) or {}
+        sections = {k.lower(): v for k, v in raw_sections.items()}
 
-        # FileReplace: ensure source file exists in the mod folder
-        for line in sections.get("FileReplace", []):
+        # Enforce allowed section names. Any unexpected section is considered invalid.
+        allowed = {
+            "filereplace",
+            "variablepatch",
+            "functionpatch",
+            "datapatch",
+            "dataadd",
+            "dependencies",
+            "metadata",
+        }
+        for sec in raw_sections.keys():
+            if sec.lower() not in allowed:
+                errors.append(f"disallowed section: [{sec}]")
+
+        def validate_resource_target(res_target: str) -> Optional[str]:
             try:
-                _, source = [p.strip() for p in line.split("=", 1)]
-            except Exception:
-                return False, f"Malformed FileReplace line: {line}"
-            src_path = os.path.join(mod_path, source)
-            if not os.path.exists(src_path):
-                return False, f"FileReplace source not found: {src_path}"
+                _res_to_path(res_target)
+                return None
+            except Exception as e:
+                return f"Invalid resource target '{res_target}': {e}"
 
-        # VariablePatch: require mode and source file presence
-        for line in sections.get("VariablePatch", []):
+        # FileReplace
+        for line in sections.get("filereplace", []):
+            try:
+                target, source = [p.strip() for p in line.split("=", 1)]
+            except Exception:
+                errors.append(f"Malformed FileReplace line: {line}")
+                continue
+            err = validate_resource_target(target)
+            if err:
+                errors.append(err)
+            if os.path.isabs(source):
+                errors.append(
+                    f"FileReplace source must be relative inside mod: {source}"
+                )
+            else:
+                abs_src = os.path.join(mod_path, source)
+                try:
+                    ensure_within(mod_path, abs_src)
+                except Exception as e:
+                    errors.append(
+                        f"FileReplace source path outside mod: {source} ({e})"
+                    )
+                    continue
+                if not os.path.exists(abs_src):
+                    errors.append(f"FileReplace source not found: {abs_src}")
+
+        # VariablePatch
+        for line in sections.get("variablepatch", []):
             try:
                 target, source_spec = [p.strip() for p in line.split("=", 1)]
             except Exception:
-                return False, f"Malformed VariablePatch line: {line}"
+                errors.append(f"Malformed VariablePatch line: {line}")
+                continue
             try:
                 s_res, s_var, meta = _parse_source_with_meta(source_spec)
             except Exception:
-                return False, f"Malformed VariablePatch source spec: {source_spec}"
+                errors.append(f"Malformed VariablePatch source spec: {source_spec}")
+                continue
             if "mode" not in meta:
-                return (
-                    False,
-                    f"VariablePatch missing '; mode=add|replace|create' in line: {line}",
+                errors.append(
+                    f"VariablePatch missing '; mode=add|replace|create' in line: {line}"
                 )
             s_path = os.path.join(mod_path, s_res)
+            try:
+                ensure_within(mod_path, s_path)
+            except Exception as e:
+                errors.append(f"VariablePatch source outside mod: {s_res} ({e})")
+                continue
             if not os.path.exists(s_path):
-                return False, f"VariablePatch source not found: {s_path}"
-            # if replace mode, disallow rename attempts
-            t_res, t_var = [p.strip() for p in target.split("::", 1)]
+                errors.append(f"VariablePatch source not found: {s_path}")
+            try:
+                t_res, t_var = [p.strip() for p in target.split("::", 1)]
+            except Exception:
+                errors.append(f"Malformed VariablePatch target: {target}")
+                continue
             if meta.get("mode") == "replace" and s_var and s_var != t_var:
-                return (
-                    False,
-                    f"VariablePatch replace attempts rename '{t_var}' -> '{s_var}' in line: {line}",
+                errors.append(
+                    f"VariablePatch replace attempts rename '{t_var}' -> '{s_var}' in line: {line}"
                 )
 
-        # FunctionPatch: source file must exist
-        for line in sections.get("FunctionPatch", []):
+        # FunctionPatch
+        for line in sections.get("functionpatch", []):
             try:
                 _, source = [p.strip() for p in line.split("=", 1)]
                 s_res, _ = [p.strip() for p in source.split("::", 1)]
             except Exception:
-                return False, f"Malformed FunctionPatch line: {line}"
+                errors.append(f"Malformed FunctionPatch line: {line}")
+                continue
             s_path = os.path.join(mod_path, s_res)
+            try:
+                ensure_within(mod_path, s_path)
+            except Exception as e:
+                errors.append(f"FunctionPatch source outside mod: {s_res} ({e})")
+                continue
             if not os.path.exists(s_path):
-                return False, f"FunctionPatch source not found: {s_path}"
+                errors.append(f"FunctionPatch source not found: {s_path}")
 
-        # DataAdd / DataPatch: source file must exist
-        for line in sections.get("DataPatch", []) + sections.get("DataAdd", []):
+        # DataAdd / DataPatch
+        for line in sections.get("datapatch", []) + sections.get("dataadd", []):
             try:
                 _, source = [p.strip() for p in line.split("=", 1)]
                 s_res, _ = [p.strip() for p in source.split("::", 1)]
             except Exception:
-                return False, f"Malformed Data line: {line}"
+                errors.append(f"Malformed Data line: {line}")
+                continue
             s_path = os.path.join(mod_path, s_res)
+            try:
+                ensure_within(mod_path, s_path)
+            except Exception as e:
+                errors.append(f"Data source outside mod: {s_res} ({e})")
+                continue
             if not os.path.exists(s_path):
-                return False, f"DataAdd source not found: {s_path}"
+                errors.append(f"Data source not found: {s_path}")
 
-        # Final sanity: try generating plan (catches other validation errors)
-        _ = generate_patch_plan(mod_config["Path"], mod_config)
-        return True, None
+        # Attempt to generate plan to catch other semantic errors
+        try:
+            _ = generate_patch_plan(mod_config["Path"], mod_config)
+        except Exception as e:
+            errors.append(f"generate_patch_plan error: {e}")
 
     except Exception as e:
-        return False, str(e)
+        return [str(e)]
+
+    return errors
+
+
+def validate_mod_config(
+    mod_config: Union[str, Dict[str, Any]],
+) -> Tuple[bool, Optional[object]]:
+    """
+    Validate a mod config or a path to a .mos manifest.
+
+    - If passed a string path to a .mos file, returns (ok: bool, errors: List[str]).
+    - If passed a parsed mod_config dict, preserves the legacy return shape:
+        (True, None) or (False, "error message").
+    """
+    # If caller provided a path string, parse it into a mod_config-like dict
+    if isinstance(mod_config, str):
+        mos_path = mod_config
+        if not mos_path or not os.path.exists(mos_path):
+            return False, [f"manifest missing: {mos_path}"]
+        cp = configparser.ConfigParser(delimiters=("=",))
+        cp.optionxform = str
+        try:
+            cp.read(mos_path, encoding="utf-8")
+        except Exception as e:
+            return False, [f"failed to parse manifest: {e}"]
+        sections = {}
+        for sec in cp.sections():
+            # create lines in the form "key = value" mirroring prior tests/layout
+            lines = [f"{k} = {v}" for k, v in cp.items(sec)]
+            sections[sec] = lines
+        cfg = {"Path": os.path.dirname(os.path.abspath(mos_path)), "Sections": sections}
+        errs = _validate_mod_config_dict(cfg)
+        return (len(errs) == 0, errs)
+
+    # Otherwise assume dict and preserve legacy return type
+    if not isinstance(mod_config, dict):
+        return False, "invalid argument to validate_mod_config"
+
+    errs = _validate_mod_config_dict(mod_config)
+    if errs:
+        # return first error for backward compatibility
+        return False, errs[0]
+    return True, None
 
 
 def _mod_mode_summary(mod_path: str, mod_config: dict) -> str:
@@ -1469,9 +1986,6 @@ def atomic_write_with_backup(target_path, new_text):
 
 
 def atomic_replace(target_path, text):
-    import os
-    import tempfile
-    from pathlib import Path
 
     p = Path(target_path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -1480,18 +1994,6 @@ def atomic_replace(target_path, text):
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
     os.replace(tmp, str(p))
-
-
-def append_atomic(target_path: str, text: str):
-    p = Path(target_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    existing = ""
-    if p.exists():
-        try:
-            existing = p.read_text(encoding="utf-8")
-        except Exception:
-            existing = ""
-    atomic_replace(target_path, existing + text)
 
 
 def atomic_copy_with_single_bak(src: str, dst: str):
@@ -1629,7 +2131,6 @@ def patch_variable(
                 )
                 return log
 
-            # --- FIX: Don't assume a dictionary. Copy the whole block and rename. ---
             # Rename the variable in the source block if names differ.
             if source_var != target_var:
                 pat = re.compile(
@@ -1649,7 +2150,7 @@ def patch_variable(
     except FileNotFoundError as e:
         log.append(f"ERROR: File not found during Variable patch: {e}")
         return log
-    except (OSError, IOError) as e:
+    except OSError as e:
         log.append(f"ERROR: I/O error during Variable patch: {e}")
         return log
     except Exception as e:
@@ -1690,7 +2191,6 @@ def patch_function(
         elif not effective_mode:
             effective_mode = "replace"
 
-        # --- FIX: Handle 'create' mode separately ---
         if effective_mode == "create":
             # For 'create', the target function must NOT exist.
             if get_function_block(target_lines, target_func):
@@ -1829,7 +2329,7 @@ def patch_function(
                 target_lines[:start_idx] + wrapper_body + target_lines[end_idx + 1 :]
             )
 
-        # --- FIX: Ensure file is always written for replace/prefix/postfix ---
+        # Ensure file is always written for replace/prefix/postfix ---
         if new_lines:
             ensure_within(work_root, work_path)
             atomic_write_with_backup(work_path, "".join(new_lines))
@@ -1842,7 +2342,7 @@ def patch_function(
     except FileNotFoundError as e:
         log.append(f"ERROR: File not found during FunctionPatch: {e}")
         return log
-    except (OSError, IOError) as e:
+    except OSError as e:
         log.append(f"ERROR: I/O error during FunctionPatch: {e}")
         return log
     except Exception as e:
@@ -2412,8 +2912,6 @@ class ResolveDialog(simpledialog.Dialog):
         mod = self.mod_map.get(mod_name)
         if mod and "Path" in mod:
             try:
-                import webbrowser
-
                 webbrowser.open(mod["Path"])
             except Exception as e:
                 logger.debug("ignored exception: %s", e)
@@ -2466,14 +2964,6 @@ class ResolveDialog(simpledialog.Dialog):
             self.apply()  # will close dialog and let parent handle selection
         except Exception as e:
             logger.debug("ignored exception: %s", e)
-
-    def apply_mod_order_to_configs(self):
-        """Updates self.mod_configs based on the listbox order."""
-        new_order_names = list(self.list_box.get(0, tk.END))
-        # Map old configs to the new order
-        mod_map = {m["Name"]: m for m in self.mod_configs}
-        new_mod_configs = [mod_map[name] for name in new_order_names]
-        return new_mod_configs
 
     def buttonbox(self):
         box = ttk.Frame(self)
@@ -2572,6 +3062,9 @@ class App(tk.Tk):
             foreground=[("active", "white")],
         )
         self.config = DEFAULTS.copy()
+        cfg = ensure_config()
+        if cfg:
+            self.config.update(cfg)
         self.mod_configs = []  # Stores parsed mod info
         self.instructions = (
             []
@@ -2582,13 +3075,21 @@ class App(tk.Tk):
         self.load_mods()  # Initial load
 
     def load_config(self):
+        """Load configuration into self.config (backwards-compatible)."""
         try:
-            if os.path.exists("config.json"):
-                with open("config.json", "r") as f:
-                    data = json.load(f)
-                    self.config.update(data)
+            # prefer platform config location
+            cfg = load_config(get_config_path())
+            # fallback to legacy ./config.json for users who already used that
+            if not cfg and os.path.exists("config.json"):
+                try:
+                    with open("config.json", "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                except Exception as e:
+                    logger.debug("legacy config.json read failed: %s", e)
+            if cfg:
+                self.config.update(cfg)
         except Exception as e:
-            print(f"Error loading config: {e}")
+            logger.debug("Error loading config: %s", e)
 
     def save_config(self):
         try:
@@ -2686,13 +3187,12 @@ class App(tk.Tk):
             mod_list_controls, text="📤", width=3, command=self.export_mod_order
         )
         btn_export.pack(side="left", padx=5)
-        _TT = _ToolTip
-        _TT(btn_export, "Export current mod order to a JSON file")
+        _ToolTip(btn_export, "Export current mod order to a JSON file")
         btn_import = ttk.Button(
             mod_list_controls, text="📥", width=3, command=self.import_mod_order
         )
         btn_import.pack(side="left", padx=5)
-        _TT(btn_import, "Import mod order from a JSON file")
+        _ToolTip(btn_import, "Import mod order from a JSON file")
         ttk.Button(
             mod_list_controls,
             text="Resolve Conflicts",
@@ -2795,16 +3295,18 @@ class App(tk.Tk):
         if self.drag_index is not None:
             new_index = self.mod_list_box.nearest(event.y)
             if new_index != self.drag_index:
-                mod_name = self.mod_list_box.get(self.drag_index)
 
                 # Update internal config order
                 mod_config_to_move = self.mod_configs.pop(self.drag_index)
                 self.mod_configs.insert(new_index, mod_config_to_move)
 
                 # Update listbox display
-                self.mod_list_box.delete(self.drag_index)
-                self.mod_list_box.insert(new_index, mod_name)
-                self.mod_list_box.selection_set(new_index)
+                ordered_mods, deps_errors = apply_dependency_resolution(
+                    self.mod_configs
+                )
+                rebuild_mod_listbox_from_configs(
+                    self.mod_list_box, ordered_mods, _get_mod_name_from_config
+                )
                 self.drag_index = new_index
                 self.update_patch_instructions()
 
@@ -2846,25 +3348,10 @@ class App(tk.Tk):
         idx = sel[0]
         mod = self.mod_configs[idx]
         mod["Enabled"] = not mod.get("Enabled", True)
-        # update the display label text
-        summary = _mod_mode_summary(mod["Path"], mod) if "Path" in mod else ""
-        label = mod["Name"] + (" " + summary if summary else "")
-        if not mod.get("Valid", True):
-            label += " [INVALID]"
-        if not mod.get("Enabled", True):
-            label += " [DISABLED]"
-        # update listbox entry inplace
-        self.mod_list_box.delete(idx)
-        self.mod_list_box.insert(idx, label)
-        self.mod_list_box.selection_set(idx)
-        try:
-            # grey disabled
-            if not mod["Enabled"]:
-                self.mod_list_box.itemconfig(idx, fg="gray")
-            else:
-                self.mod_list_box.itemconfig(idx, fg="black")
-        except Exception as e:
-            logger.debug("ignored exception: %s", e)
+        ordered_mods, deps_errors = apply_dependency_resolution(self.mod_configs)
+        rebuild_mod_listbox_from_configs(
+            self.mod_list_box, ordered_mods, _get_mod_name_from_config
+        )
         self.update_patch_instructions()
         self.update_conflict_status()
         self.append_log(
@@ -2926,29 +3413,41 @@ class App(tk.Tk):
 
             # Sort by directory name initially
             self.mod_configs.sort(key=lambda m: Path(m["Path"]).name)
+            # Resolve declared dependencies and reorder mods accordingly.
+            # apply_dependency_resolution returns (ordered_list, {mod_name: [errors]})
+            try:
+                ordered, dep_errors = apply_dependency_resolution(self.mod_configs)
+                if ordered:
+                    self.mod_configs = ordered
 
-        # Update GUI listbox with a visual invalid marker
-        self.mod_list_box.delete(0, tk.END)
-        invalid_count = 0
-        for mod in self.mod_configs:
-            summary = _mod_mode_summary(mod["Path"], mod)
-            label = mod["Name"] + (" " + summary if summary else "")
-            if not mod.get("Valid", True):
-                label += " [INVALID]"
-                invalid_count += 1
-            if not mod.get("Enabled", True):
-                label += " [DISABLED]"
-            self.mod_list_box.insert(tk.END, label)
-            mod["DisplayLabel"] = label
-            if not mod.get("Enabled", True):
-                try:
-                    self.mod_list_box.itemconfig(tk.END, fg="gray")
-                except Exception as e:
-                    logger.debug("ignored exception: %s", e)
+                # annotate per-mod dependency errors into config for UI feedback
+                for name, errs in (dep_errors or {}).items():
+                    for m in self.mod_configs:
+                        # prefer explicit Metadata Name if present, else fallback to folder name
+                        mod_name = m.get("Name") or _get_mod_name_from_config(m)
+                        if mod_name == name:
+                            m.setdefault("Errors", []).extend(errs)
+                            m["Valid"] = False
+            except Exception as e:
+                # Non-fatal; surface to debug log and continue with name-sorted order
+                logger.debug("Dependency resolution failed: %s", e)
+
+            # Rebuild the mod listbox to reflect resolved order and error feedback.
+            # If your UI uses a different list widget, replace the call with the appropriate updater.
+            try:
+                rebuild_mod_listbox_from_configs(
+                    self.mod_list_box, self.mod_configs, _get_mod_name_from_config
+                )
+            except Exception:
+                # keep load resilient if UI widget API differs
+                logger.debug(
+                    "Failed to rebuild mod listbox with dependency annotations."
+                )
         # Rebuild instructions from only valid mods
         self.update_patch_instructions()
 
         # Show a single consolidated error dialog if there are invalid mods
+        invalid_count = sum(1 for mod in self.mod_configs if not mod.get("Valid", True))
         if invalid_count:
             msg_lines = []
             for mod in self.mod_configs:
@@ -3025,7 +3524,7 @@ class App(tk.Tk):
 
         # Create preview window robustly
         try:
-            parent = getattr(self, "root", None) or tk._default_root
+            parent = self
             preview = tk.Toplevel(parent)
             preview.title("Rollback — Preview .bak files")
             preview.geometry("700x400")
@@ -3156,8 +3655,6 @@ class App(tk.Tk):
         os.makedirs(default_dir, exist_ok=True)
         default = os.path.join(default_dir, f"gmos_support_{ts}.zip")
         try:
-            from tkinter import filedialog, messagebox
-
             out = filedialog.asksaveasfilename(
                 defaultextension=".zip", initialfile=os.path.basename(default)
             )
@@ -3351,11 +3848,12 @@ class App(tk.Tk):
                 mod_config_to_move = self.mod_configs.pop(index)
                 self.mod_configs.insert(new_index, mod_config_to_move)
 
-                # Update listbox display
-                mod_name = self.mod_list_box.get(index)
-                self.mod_list_box.delete(index)
-                self.mod_list_box.insert(new_index, mod_name)
-                self.mod_list_box.selection_set(new_index)
+                ordered_mods, deps_errors = apply_dependency_resolution(
+                    self.mod_configs
+                )
+                rebuild_mod_listbox_from_configs(
+                    self.mod_list_box, ordered_mods, _get_mod_name_from_config
+                )
 
                 self.update_patch_instructions()
                 self.update_conflict_status()
@@ -3398,23 +3896,10 @@ class App(tk.Tk):
             # default to True
             currently = bool(mod.get("Enabled", True))
             mod["Enabled"] = not currently
-            # rebuild label
-            base = mod.get("Name", f"mod_{idx}")
-            summary = _mod_mode_summary(mod["Path"], mod) if "Path" in mod else ""
-            label = base + (" " + summary if summary else "")
-            if not mod["Enabled"]:
-                label += " [DISABLED]"
-            # update listbox display (keep index stable)
-            self.mod_list_box.delete(idx)
-            self.mod_list_box.insert(idx, label)
-            # color grey if supported
-            try:
-                self.mod_list_box.itemconfig(
-                    idx, fg="gray" if not mod["Enabled"] else "black"
-                )
-            except Exception as e:
-                logger.debug("ignored exception: %s", e)
-            self.mod_list_box.selection_set(idx)
+            ordered_mods, deps_errors = apply_dependency_resolution(self.mod_configs)
+            rebuild_mod_listbox_from_configs(
+                self.mod_list_box, ordered_mods, _get_mod_name_from_config
+            )
             self.append_log(
                 f"Mod '{mod.get('Name')}' {'enabled' if mod['Enabled'] else 'disabled'}."
             )
@@ -3586,9 +4071,6 @@ class App(tk.Tk):
         self.append_log("--- Starting Patch Simulation & Diff (full) ---")
         self.log_notebook.select(1)  # show diff tab
         self.diff_txt.delete("1.0", tk.END)
-
-        # Build mapping resource path -> set(mod names) to avoid duplicates
-        from collections import defaultdict
 
         touched_by: Dict[str, set] = defaultdict(set)
         for entry in self.instructions:
@@ -3815,8 +4297,6 @@ class App(tk.Tk):
             return
 
         try:
-            from tkinter import filedialog, messagebox
-
             default_dir = os.path.join(os.path.expanduser("~"), "Documents")
             os.makedirs(default_dir, exist_ok=True)
             ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
