@@ -50,11 +50,11 @@ def test_file_replace_and_launch_headless(tmp_path):
     launcher = bin_dir / "launcher.py"
     out_file = work / "launcher_ran.txt"
 
+    # write a small portable python launcher; use repr() to produce a safe literal
     launcher.write_text(
-        f"""import pathlib
-path=pathlib.Path({out_file!r})
-path.write_text('launched', encoding='utf-8')
-"""
+        "import pathlib\n"
+        "path=pathlib.Path(" + repr(str(out_file)) + ")\n"
+        "path.write_text('launched', encoding='utf-8')\n"
     )
 
     # On Unix make it executable (not required on Windows)
@@ -68,6 +68,14 @@ path.write_text('launched', encoding='utf-8')
     cmd = [sys.executable, str(launcher)]
     p = mod._safe_spawn(cmd, cwd=str(work))
     p.wait(timeout=10)
+    # if process failed, re-run capturing output to show error for CI logs
+    if p.returncode != 0:
+        import subprocess
+
+        completed = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True)
+        raise AssertionError(
+            f"launcher failed (rc={completed.returncode}) stdout={completed.stdout!r} stderr={completed.stderr!r}"
+        )
     # give a short moment for filesystem to settle
     time.sleep(0.05)
 

@@ -333,6 +333,565 @@ def ensure_config(
     return res
 
 
+# ----------------------------
+# Permission checks and friendly error handling
+# ----------------------------
+def check_write_permission(path: str) -> Tuple[bool, Optional[str]]:
+    """
+    Check whether we can write to `path` (file or directory).
+    Returns (True, None) when writable. Otherwise returns (False, message).
+
+    Best-effort checks:
+      - if path is a file, check parent dir writability.
+      - os.access for write permission.
+      - try to create+remove a temp file to detect ACL/UAC issues.
+    """
+    try:
+        if not path:
+            return False, "empty path"
+        if os.path.isdir(path):
+            parent = path
+        else:
+            parent = os.path.dirname(path) or "."
+
+        # quick check
+        if not os.access(parent, os.W_OK):
+            return False, f"No write permission to '{parent}'"
+
+        # try creating a temp file inside parent
+        import tempfile
+
+        fd = None
+        try:
+            fd, tmp = tempfile.mkstemp(prefix=".gmos_check_", dir=parent)
+            os.close(fd)
+            os.remove(tmp)
+        except PermissionError as pe:
+            return False, f"Permission denied writing to '{parent}': {pe}"
+        except Exception:
+            # best-effort: if mkstemp fails for other reasons, warn but allow
+            pass
+
+        return True, None
+    except Exception as e:
+        return False, f"permission check error: {e}"
+
+
+def handle_permission_error(
+    exc: Exception, path: str, parent: Optional[object] = None
+) -> None:
+    """
+    Friendly handling of permission errors. Logs and optionally shows a GUI messagebox.
+
+    parent: if a Tk parent window is available, a messagebox will be shown.
+    """
+    msg = f"Permission error while accessing '{path}': {exc}\n\n"
+    msg += "Common fixes:\n - choose a different work folder\n - run GMOS as administrator/sudo\n - check folder ACLs / antivirus\n"
+    logger.error(msg)
+    # show GUI alert if possible
+    try:
+        if parent is not None:
+            from tkinter import messagebox
+
+            messagebox.showerror("Permission Error", msg, parent=parent)
+    except Exception:
+        # headless: print to debug only
+        logger.debug("Permission dialog not shown (headless or no tkinter available).")
+
+
+def safe_atomic_copy_with_bak(src: str, dst: str, *args, **kwargs):
+    """
+    Safe wrapper that verifies write permissions before attempting the atomic copy
+    that produces a .bak file. Replace direct calls to atomic_copy_with_single_bak(...)
+    with this wrapper to get friendlier errors and early checks.
+    """
+    try:
+        parent = os.path.dirname(dst) or "."
+        ok, err = check_write_permission(parent)
+        if not ok:
+            raise RuntimeError(err or "no write permission")
+        # call existing atomic copy function if present
+        if "atomic_copy_with_single_bak" in globals():
+            return atomic_copy_with_single_bak(src, dst, *args, **kwargs)
+        else:
+            # fallback: attempt an atomic write via replace
+            tmp = dst + ".tmp"
+            with open(tmp, "wb") as fsrc, open(src, "rb") as s:
+                fsrc.write(s.read())
+            os.replace(tmp, dst)
+            return ["SUCCESS"]
+    except Exception as e:
+        handle_permission_error(e, dst)
+        raise
+
+
+# ----------------------------
+# Safe replace shim (global)
+# ----------------------------
+def _safe_replace(src: str, dst: str):
+    """
+    Wrapper around os.replace that performs a write-permission check and
+    surfaces friendly errors via handle_permission_error before re-raising.
+
+    This protects existing code that calls os.replace directly by performing
+    a pre-flight permission check and presenting a clearer message if the
+    operation would fail due to ACL/UAC/readonly issues.
+    """
+    try:
+        parent = os.path.dirname(dst) or "."
+        ok, err = check_write_permission(parent)
+        if not ok:
+            raise RuntimeError(err or f"No write permission to '{parent}'")
+        return _orig_os_replace(src, dst)
+    except Exception as e:
+        # Surface a friendly dialog/logging and re-raise the original error.
+        try:
+            handle_permission_error(e, dst)
+        except Exception:
+            # ensure problems in the handler do not swallow the original error
+            logger.debug("handle_permission_error failed while reporting: %s", e)
+        raise
+
+
+# Install shim for os.replace so existing replace calls are guarded.
+# Keep a backing reference to the original implementation.
+try:
+    _orig_os_replace = os.replace
+    os.replace = _safe_replace
+except Exception:
+    # Non-fatal if monkey-patching is not allowed in some embedded environments.
+    logger.debug("Failed to install os.replace shim; continuing without global guard.")
+
+# ----------------------------
+# Diff / hunk utilities (non-GUI)
+# ----------------------------
+
+_UNIFIED_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def generate_unified_diff(
+    orig_text: str,
+    new_text: str,
+    fromfile: str = "orig",
+    tofile: str = "new",
+    n: int = 3,
+) -> str:
+    """Return unified diff string between orig_text and new_text."""
+    a = orig_text.splitlines(keepends=True)
+    b = new_text.splitlines(keepends=True)
+    return "".join(difflib.unified_diff(a, b, fromfile=fromfile, tofile=tofile, n=n))
+
+
+def parse_unified_diff_hunks(diff_text: str) -> List[Dict[str, Any]]:
+    """
+    Parse unified diff text into a list of hunks.
+    Each hunk is a dict:
+      {
+        'old_start': int, 'old_count': int,
+        'new_start': int, 'new_count': int,
+        'lines': List[str],         # raw diff lines for the hunk (including leading ' ', '-', '+')
+        'old_lines': List[str],     # original-context lines for the hunk (without prefixes)
+        'new_lines': List[str],     # new-context lines for the hunk (without prefixes)
+      }
+    """
+    lines = diff_text.splitlines()
+    hunks: List[Dict[str, Any]] = []
+    i = 0
+    while i < len(lines):
+        m = _UNIFIED_HUNK_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        old_start = int(m.group(1))
+        old_count = int(m.group(2) or "1")
+        new_start = int(m.group(3))
+        new_count = int(m.group(4) or "1")
+        i += 1
+        hunk_lines: List[str] = []
+        old_lines: List[str] = []
+        new_lines: List[str] = []
+        while i < len(lines) and not _UNIFIED_HUNK_RE.match(lines[i]):
+            ln = lines[i]
+            if ln.startswith("+") or ln.startswith("-") or ln.startswith(" "):
+                hunk_lines.append(ln)
+                if ln.startswith("-") or ln.startswith(" "):
+                    old_lines.append(ln[1:])
+                if ln.startswith("+") or ln.startswith(" "):
+                    new_lines.append(ln[1:])
+            else:
+                # context or file header lines might appear; include as-is
+                hunk_lines.append(ln)
+            i += 1
+        hunks.append(
+            {
+                "old_start": old_start,
+                "old_count": old_count,
+                "new_start": new_start,
+                "new_count": new_count,
+                "lines": hunk_lines,
+                "old_lines": old_lines,
+                "new_lines": new_lines,
+            }
+        )
+    return hunks
+
+
+def apply_hunks(
+    original_text: str, hunks: List[Dict[str, Any]], selected_hunk_indices: List[int]
+) -> str:
+    """
+    Apply selected hunks (by index) to original_text and return merged text.
+    selected_hunk_indices is list of indices into hunks to accept (others remain as original).
+    This operates at hunk granularity and does not attempt patch fuzzing.
+    """
+    orig_lines = original_text.splitlines(keepends=False)
+    result: List[str] = []
+    # pointer in orig_lines (0-based)
+    ptr = 0
+    for idx, h in enumerate(hunks):
+        old_start = h["old_start"] - 1  # convert to 0-based
+        old_count = h["old_count"]
+        # copy unchanged lines up to hunk
+        while ptr < old_start and ptr < len(orig_lines):
+            result.append(orig_lines[ptr])
+            ptr += 1
+        # now at start of hunk area
+        if idx in selected_hunk_indices:
+            # accept new_lines
+            for nl in h["new_lines"]:
+                result.append(nl.rstrip("\n"))
+        else:
+            # keep original old_lines (if present). If old_count==0, nothing to add.
+            for j in range(old_count):
+                if (old_start + j) < len(orig_lines):
+                    result.append(orig_lines[old_start + j])
+        ptr = old_start + old_count
+    # append remaining tail
+    while ptr < len(orig_lines):
+        result.append(orig_lines[ptr])
+        ptr += 1
+    # reassemble with newlines
+    return "\n".join(result) + ("\n" if original_text.endswith("\n") else "")
+
+
+# ----------------------------
+# HunkViewer UI (Tkinter)
+# ----------------------------
+class HunkViewer(tk.Toplevel):
+    """
+    Modal dialog to inspect unified-diff hunks and select which hunks to apply.
+
+    Usage:
+        hv = HunkViewer(parent, orig_text, new_text)
+        merged = hv.show_modal()  # returns merged text or None if cancelled
+    """
+
+    def __init__(self, parent, orig_text: str, new_text: str):
+        super().__init__(parent)
+        self.parent = parent
+        self.orig_text = orig_text
+        self.new_text = new_text
+        self.transient(parent)
+        self.title("Resolve conflicts - Hunk viewer")
+        self.resizable(True, True)
+        self.result = None
+
+        # generate diff and hunks
+        self.diff_text = generate_unified_diff(
+            orig_text, new_text, fromfile="original", tofile="replacement"
+        )
+        self.hunks = parse_unified_diff_hunks(self.diff_text)
+        self.hunk_vars = [tk.IntVar(value=1) for _ in self.hunks]
+
+        # layout: left pane with hunk list + checkboxes, right pane preview
+        left = tk.Frame(self)
+        left.pack(side="left", fill="y", padx=6, pady=6)
+        tk.Label(left, text="Hunks (check to apply)").pack(anchor="w")
+        list_frame = tk.Frame(left)
+        list_frame.pack(fill="y", expand=True)
+        # create a scrollable frame for many hunks
+        canvas = tk.Canvas(list_frame, width=320, height=300)
+        vs = tk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vs.set)
+        vs.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = tk.Frame(canvas)
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        for idx, h in enumerate(self.hunks):
+            cb = tk.Checkbutton(
+                inner,
+                text=f"Hunk {idx+1}: old@{h['old_start']}+{h['old_count']} -> new@{h['new_start']}+{h['new_count']}",
+                variable=self.hunk_vars[idx],
+                anchor="w",
+                justify="left",
+                wraplength=300,
+            )
+            cb.pack(anchor="w", fill="x", pady=2)
+            # tiny preview snippet
+            snippet = (
+                h["old_lines"][:1] + ["..."]
+                if len(h["old_lines"]) > 1
+                else h["old_lines"]
+            )
+            tk.Label(inner, text=" ".join(snippet)[:200], fg="gray").pack(
+                anchor="w", padx=12
+            )
+
+        inner.update_idletasks()
+        canvas.config(scrollregion=canvas.bbox("all"))
+
+        right = tk.Frame(self)
+        right.pack(side="right", fill="both", expand=True, padx=6, pady=6)
+        tk.Label(right, text="Merged preview").pack(anchor="w")
+        self.preview = tk.Text(right, width=80, height=30, wrap="none")
+        self.preview.pack(fill="both", expand=True)
+        self.preview.configure(state="disabled")
+
+        # buttons
+        btnf = tk.Frame(self)
+        btnf.pack(fill="x", padx=6, pady=6)
+        tk.Button(btnf, text="Apply Selected", command=self._on_apply).pack(
+            side="right", padx=4
+        )
+        tk.Button(btnf, text="Apply All", command=self._on_apply_all).pack(
+            side="right", padx=4
+        )
+        tk.Button(btnf, text="Cancel", command=self._on_cancel).pack(
+            side="right", padx=4
+        )
+
+        # update preview when checkboxes change
+        for v in self.hunk_vars:
+            v.trace_add("write", lambda *a: self._update_preview())
+
+        # initial preview
+        self._update_preview()
+
+        # modal behavior
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+    def _selected_indices(self) -> List[int]:
+        return [i for i, v in enumerate(self.hunk_vars) if v.get()]
+
+    def _update_preview(self):
+        try:
+            sel = self._selected_indices()
+            merged = apply_hunks(self.orig_text, self.hunks, sel)
+            self.preview.configure(state="normal")
+            self.preview.delete("1.0", "end")
+            self.preview.insert("1.0", merged)
+            self.preview.configure(state="disabled")
+        except Exception:
+            # non-fatal; leave preview unchanged
+            pass
+
+    def _on_apply(self):
+        self.result = apply_hunks(self.orig_text, self.hunks, self._selected_indices())
+        self.destroy()
+
+    def _on_apply_all(self):
+        self.result = apply_hunks(
+            self.orig_text, self.hunks, list(range(len(self.hunks)))
+        )
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self.destroy()
+
+    def show_modal(self):
+        self.wait_window(self)
+        return self.result
+
+
+# ----------------------------
+# Mod Info Pane (Tkinter)
+# ----------------------------
+class ModInfoPane(tk.Frame):
+    """
+    Right-side inspector panel showing selected mod metadata and dependency errors.
+    Usage:
+        self.mod_info = ModInfoPane(parent_frame)
+        self.mod_info.pack(side="right", fill="y")
+        # when selection changes:
+        self.mod_info.update_for_config(cfg)
+    """
+
+    def __init__(self, master, width=360, **kwargs):
+        super().__init__(master, width=width, **kwargs)
+        self.columnconfigure(1, weight=1)
+        self._widgets = {}
+
+        def _label(row, text, bold=False):
+            lbl = tk.Label(self, text=text, anchor="w", justify="left")
+            if bold:
+                lbl.config(font=("TkDefaultFont", 9, "bold"))
+            lbl.grid(
+                row=row, column=0, sticky="nw", padx=6, pady=(6 if row == 0 else 2)
+            )
+            return lbl
+
+        # Basic metadata keys
+        _label(0, "Name:", bold=True)
+        self._widgets["name"] = tk.Label(
+            self, text="", anchor="w", justify="left", wraplength=260
+        )
+        self._widgets["name"].grid(row=0, column=1, sticky="nw", padx=6, pady=6)
+
+        _label(1, "Version:")
+        self._widgets["version"] = tk.Label(self, text="", anchor="w")
+        self._widgets["version"].grid(row=1, column=1, sticky="nw", padx=6)
+
+        _label(2, "Author:")
+        self._widgets["author"] = tk.Label(self, text="", anchor="w")
+        self._widgets["author"].grid(row=2, column=1, sticky="nw", padx=6)
+
+        _label(3, "Description:", bold=True)
+        self._widgets["desc"] = tk.Text(self, height=6, wrap="word")
+        self._widgets["desc"].grid(
+            row=3, column=0, columnspan=2, sticky="nsew", padx=6, pady=6
+        )
+        self._widgets["desc"].configure(state="disabled")
+
+        # Dependencies and Errors
+        _label(4, "Dependencies:", bold=True)
+        self._widgets["deps"] = tk.Label(
+            self, text="", anchor="w", justify="left", fg="black", wraplength=260
+        )
+        self._widgets["deps"].grid(row=4, column=1, sticky="nw", padx=6, pady=2)
+
+        _label(5, "Dependency Errors:", bold=True)
+        self._widgets["errors"] = tk.Label(
+            self, text="", anchor="w", justify="left", fg="red", wraplength=260
+        )
+        self._widgets["errors"].grid(
+            row=5, column=0, columnspan=2, sticky="nw", padx=6, pady=(2, 6)
+        )
+
+        # Action buttons
+        btnf = tk.Frame(self)
+        btnf.grid(row=6, column=0, columnspan=2, sticky="ew", padx=6, pady=6)
+        self._widgets["open_folder_btn"] = tk.Button(
+            btnf, text="Open Mod Folder", command=self._open_mod_folder
+        )
+        self._widgets["open_folder_btn"].pack(side="left")
+        self._widgets["toggle_enable_btn"] = tk.Button(
+            btnf, text="Toggle Enable", command=self._toggle_enable
+        )
+        self._widgets["toggle_enable_btn"].pack(side="left", padx=6)
+
+        # internal state
+        self._current_cfg = None
+
+    def _get_cfg_path(self):
+        cfg = self._current_cfg or {}
+        return cfg.get("Path", "")
+
+    def _open_mod_folder(self):
+        path = self._get_cfg_path()
+        if not path:
+            return
+        try:
+            if sys.platform.startswith("win"):
+                subprocess.Popen(["explorer", path])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception:
+            handle_permission_error(
+                Exception("failed to open folder"), path, parent=self
+            )
+
+    def _toggle_enable(self):
+        cfg = self._current_cfg
+        if not cfg:
+            return
+        # toggle a convention key 'Enabled'
+        cur = cfg.get("Enabled", True)
+        cfg["Enabled"] = not bool(cur)
+        # update visual state immediately
+        self.update_for_config(cfg)
+        # caller UI should refresh list ordering/appearance afterwards
+        try:
+            if hasattr(self.master, "refresh_mod_list"):
+                self.master.refresh_mod_list()
+        except Exception:
+            # ignore if no refresh available
+            pass
+
+    def _safe_set_text(self, widget, text):
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        widget.insert("1.0", text or "")
+        widget.configure(state="disabled")
+
+    def update_for_config(self, cfg: Optional[Dict[str, Any]]):
+        """
+        Populate pane from config dict. Accepts None to clear the pane.
+        Expected config has:
+          - Path
+          - Sections (optional) where 'Metadata' may include Name, Version, Author, Description
+          - _deps_errors list produced by apply_dependency_resolution
+        """
+        self._current_cfg = cfg
+        if not cfg:
+            for k in self._widgets:
+                if k == "desc":
+                    self._safe_set_text(self._widgets["desc"], "")
+                else:
+                    self._widgets[k].config(text="")
+            return
+
+        # read metadata from Sections['Metadata'] lines or direct keys
+        name = cfg.get("Name") or _get_mod_name_from_config(cfg)
+        version = ""
+        author = ""
+        description = ""
+        sections = cfg.get("Sections") or {}
+        for sec_k, lines in sections.items():
+            if sec_k.lower() == "metadata":
+                for line in lines:
+                    try:
+                        k, v = [p.strip() for p in line.split("=", 1)]
+                    except Exception:
+                        continue
+                    lk = k.lower()
+                    if lk == "name" and v:
+                        name = v
+                    elif lk == "version":
+                        version = v
+                    elif lk == "author":
+                        author = v
+                    elif lk in ("desc", "description"):
+                        description = v
+
+        self._widgets["name"].config(text=name or "")
+        self._widgets["version"].config(text=version or "")
+        self._widgets["author"].config(text=author or "")
+        self._safe_set_text(self._widgets["desc"], description or "")
+
+        deps = []
+        for sec_k, lines in sections.items():
+            if sec_k.lower() == "dependencies":
+                for line in lines:
+                    try:
+                        _, val = [p.strip() for p in line.split("=", 1)]
+                    except Exception:
+                        val = line.strip()
+                    for part in (p.strip() for p in val.split(",") if p.strip()):
+                        deps.append(part)
+        self._widgets["deps"].config(text=", ".join(deps) or "(none)")
+
+        errlist = cfg.get("_deps_errors") or cfg.get("Errors") or []
+        if errlist:
+            self._widgets["errors"].config(text="\n".join(errlist))
+        else:
+            self._widgets["errors"].config(text="")
+
+
 def _get_mod_name_from_config(mod_config: Dict[str, Any]) -> str:
     """Determine mod name. Prefer Metadata 'Name' then folder basename."""
     # try metadata section lines like "Name = value"
@@ -1397,7 +1956,10 @@ def get_function_block(lines: List[str], func_name: str) -> Optional[Tuple[int, 
     Return (start, end) indices of a function body block named func_name in lines.
     Excludes the 'func ...' line and the final 'return' or 'pass' lines if they are not indented.
     """
-    pat = re.compile(rf"^\s*func\s+{re.escape(func_name)}\s*\(.*?\):")
+    # allow optional return type between ')' and ':' (e.g. "-> void")
+    pat = re.compile(
+        rf"^\s*func\s+{re.escape(func_name)}\s*\(.*?\)\s*(?:->\s*[^:]+)?\s*:"
+    )
     start = -1
     for i, ln in enumerate(lines):
         if pat.match(ln):
@@ -1408,6 +1970,14 @@ def get_function_block(lines: List[str], func_name: str) -> Optional[Tuple[int, 
 
     # Function body starts one line after the signature
     body_start = start + 1
+    # If the signature contains an inline body after the colon (e.g. `func foo(): return 1`)
+    # treat the signature line itself as the function body.
+    header_line = lines[start]
+    if ":" in header_line:
+        after = header_line.split(":", 1)[1]
+        if after.strip() != "":
+            # return the signature line as the (single-line) body
+            return start, start
 
     # Find end of function block by checking indentation
     # Function body ends when indentation reverts to the level of the 'func' keyword
@@ -2040,7 +2610,8 @@ def lazy_copy_file(
     if not os.path.exists(work_path):
         # Use atomic copy. This helper doesn't create a .bak because the target doesn't exist yet,
         # which is correct for a lazy-copy.
-        atomic_copy_with_single_bak(original_path, work_path)
+        # use safe wrapper to surface permission errors early and show friendly messages
+        safe_atomic_copy_with_bak(original_path, work_path)
         return work_path, f"Copied {relative_path} to working directory."
 
     return work_path, f"Used existing {relative_path} in working directory."
@@ -2367,17 +2938,112 @@ def patch_file_replace(
             log.append(f"ERROR: Source file not found: {source_path}. Skipping.")
             return log
 
-        # Use atomic copy with backup semantics. This will create a .bak of the original file if one exists.
-        atomic_copy_with_single_bak(source_path, work_path)
+        # If a working copy already exists and differs from the replacement,
+        # offer hunk-level conflict resolution via a modal HunkViewer.
+        try:
+            if os.path.exists(work_path):
+                # read both files as text for diffing (best-effort; binary will be handled by bytes compare below)
+                try:
+                    with open(work_path, "r", encoding="utf-8", errors="ignore") as f:
+                        orig_text = f.read()
+                    with open(source_path, "r", encoding="utf-8", errors="ignore") as f:
+                        new_text = f.read()
+                except Exception:
+                    # fallback: compare as bytes; if equal then no conflict, else skip interactive resolve
+                    try:
+                        if (
+                            open(work_path, "rb").read()
+                            != open(source_path, "rb").read()
+                        ):
+                            log.append(
+                                f"CONFLICT: binary files differ: {work_path}; skipping interactive resolution in headless mode."
+                            )
+                            return log
+                        # identical bytes -> nothing to do
+                        return log
+                    except Exception:
+                        log.append(
+                            f"ERROR: failed comparing files for conflict resolution: {work_path}"
+                        )
+                        return log
 
-        log.append(
-            f"SUCCESS: FileReplace: '{target_res}' replaced by '{Path(source_path).name}'."
-        )
-        return log
+                # if texts are identical, nothing to do
+                if orig_text == new_text:
+                    return log
+
+                # We have a textual diff. If UI is available show HunkViewer,
+                # otherwise in headless/CI mode automatically apply the replacement
+                # (create .bak and overwrite) so non-interactive workflows succeed.
+                merged_text = None
+                try:
+                    parent = None
+                    if "tk" in globals() and getattr(tk, "_default_root", None):
+                        parent = tk._default_root
+
+                    if parent is None:
+                        # headless: apply replacement automatically (with backup)
+                        try:
+                            safe_atomic_copy_with_bak(source_path, work_path)
+                            log.append(
+                                f"SUCCESS: Replaced {work_path} with {source_path} (headless auto-apply)"
+                            )
+                            return log
+                        except Exception as e:
+                            log.append(
+                                f"ERROR: failed to auto-apply replacement in headless mode: {e}"
+                            )
+                            return log
+
+                    # interactive path: show hunk viewer
+                    hv = HunkViewer(parent, orig_text, new_text)
+                    merged_text = hv.show_modal()
+                except Exception as e:
+                    log.append(f"ERROR: failed to open conflict resolution UI: {e}")
+                    return log
+
+                if merged_text is None:
+                    # user cancelled resolution
+                    log.append(
+                        f"CONFLICT: user cancelled resolution for {work_path}; skipping."
+                    )
+                    return log
+
+                # write merged text to temporary file and atomically replace
+                tmp_merge = work_path + ".gmos_merged"
+                try:
+                    with open(tmp_merge, "w", encoding="utf-8") as tf:
+                        tf.write(merged_text)
+                    safe_atomic_copy_with_bak(tmp_merge, work_path)
+                    try:
+                        os.remove(tmp_merge)
+                    except Exception:
+                        pass
+                    log.append(f"SUCCESS: Applied merged changes to {work_path}")
+                    return log
+                except Exception as e:
+                    log.append(f"ERROR: failed to apply merged result: {e}")
+                    try:
+                        os.remove(tmp_merge)
+                    except Exception:
+                        pass
+                    return log
+
+        except Exception as e:
+            # Non-fatal: record and skip this replacement
+            log.append(f"ERROR: conflict resolution pre-check failed: {e}")
+            return log
+
+        # No conflict or resolved above: perform atomic replacement
+        try:
+            safe_atomic_copy_with_bak(source_path, work_path)
+            log.append(f"SUCCESS: Copied {source_path} -> {work_path}")
+        except Exception as e:
+            # friendly error in the per-mod log and stop processing this replacement
+            log.append(f"ERROR: failed to copy replacement file: {e}")
 
     except Exception as e:
         log.append(f"FATAL ERROR during FileReplace: {e}")
-        return log
+    return log
 
 
 def run_patcher(
@@ -3243,6 +3909,65 @@ class App(tk.Tk):
         self._btn_up.pack(side="top", padx=2, pady=0)
         self._btn_down.pack(side="top", padx=2, pady=0)
         self._arrow_frame.place_forget()  # hide initially
+        # Create the ModInfoPane inspector to the right of the mod list.
+        # Use top_frame as the parent so the pane sits alongside the mod list.
+        try:
+            # Create the ModInfoPane but keep it hidden initially.
+            # UI can reveal it with the toggle button added below.
+            if not getattr(self, "mod_info", None):
+                try:
+                    self.mod_info = ModInfoPane(top_frame)
+                    # do NOT pack it now; keep hidden until user opens it
+                    self.mod_info_visible = False
+                except Exception:
+                    # headless/tests may not allow widget creation
+                    self.mod_info = None
+                    self.mod_info_visible = False
+        except Exception:
+            self.mod_info = None
+            self.mod_info_visible = False
+
+        # Add a small toggle button to show/hide the mod info pane.
+        try:
+            if not getattr(self, "mod_info_toggle_btn", None):
+
+                def _toggle():
+                    try:
+                        if getattr(self, "mod_info_visible", False):
+                            try:
+                                self.mod_info.pack_forget()
+                            except Exception:
+                                pass
+                            self.mod_info_visible = False
+                            try:
+                                self.mod_info_toggle_btn.config(text="Show Mod Info")
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                # pack to right so it sits beside the list
+                                self.mod_info.pack(side="right", fill="y", padx=(6, 0))
+                            except Exception:
+                                pass
+                            self.mod_info_visible = True
+                            try:
+                                self.mod_info_toggle_btn.config(text="Hide Mod Info")
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                self.mod_info_toggle_btn = tk.Button(
+                    top_frame, text="Show Mod Info", command=_toggle
+                )
+                # place the toggle button near the mod list controls; non-invasive pack
+                try:
+                    self.mod_info_toggle_btn.pack(side="right", padx=(6, 0))
+                except Exception:
+                    # ignore layout failures in atypical UI setups
+                    pass
+        except Exception:
+            pass
 
         # 3. Action Buttons
         action_frame = ttk.Frame(top_frame, padding="5")
@@ -3314,6 +4039,12 @@ class App(tk.Tk):
         sel = self.mod_list_box.curselection()
         if not sel:
             self._arrow_frame.place_forget()
+            # clear inspector when nothing is selected
+            try:
+                if getattr(self, "mod_info", None):
+                    self.mod_info.update_for_config(None)
+            except Exception:
+                pass
             return
         idx = sel[0]
         # get bbox of the selected item (y offset relative to listbox)
@@ -3340,6 +4071,24 @@ class App(tk.Tk):
             self._arrow_frame.place(x=place_x, y=place_y)
         except Exception:
             self._arrow_frame.place_forget()
+            try:
+                if getattr(self, "mod_info", None):
+                    self.mod_info.update_for_config(None)
+            except Exception:
+                pass
+            return
+
+        # Update the ModInfoPane with the selected mod config (if available)
+        try:
+            cfg = self.mod_configs[idx] if 0 <= idx < len(self.mod_configs) else None
+            if getattr(self, "mod_info", None):
+                self.mod_info.update_for_config(cfg)
+        except Exception:
+            try:
+                if getattr(self, "mod_info", None):
+                    self.mod_info.update_for_config(None)
+            except Exception:
+                pass
 
     def _on_mod_double_click(self, event=None):
         sel = self.mod_list_box.curselection()
@@ -3463,6 +4212,24 @@ class App(tk.Tk):
         self.append_log(
             f"Loaded {len(self.mod_configs)} mods ({invalid_count} invalid)."
         )
+        # Update ModInfoPane to reflect current selection (or clear it)
+        try:
+            if getattr(self, "mod_info", None):
+                sel = self.mod_list_box.curselection()
+                if sel:
+                    idx = int(sel[0])
+                    cfg = (
+                        self.mod_configs[idx]
+                        if 0 <= idx < len(self.mod_configs)
+                        else None
+                    )
+                    self.mod_info.update_for_config(cfg)
+                else:
+                    self.mod_info.update_for_config(None)
+        except Exception:
+            # non-fatal; continue
+            pass
+
         self._arrow_frame.place_forget()
 
     def rollback_working_dir(self):
