@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # GMOS I/O Safety Test Suite
 import os
+import sys
 from typing import Any
 
 import pytest
@@ -47,7 +48,10 @@ def test_atomic_write_creates_backup(fs: Any) -> None:
         assert f.read() == "Version 1"
 
 
-@pytest.mark.skipif(not _pyfakefs_available, reason="pyfakefs not installed")
+@pytest.mark.skipif(
+    not _pyfakefs_available or sys.platform == "win32",
+    reason="pyfakefs missing OR Windows chmod does not block owner writes",
+)
 def test_atomic_write_handles_readonly_dir(fs: Any) -> None:
     """Verify graceful failure when directory is not writable."""
     protected_dir = "/protected"

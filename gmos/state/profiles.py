@@ -26,8 +26,11 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict, cast
 
 from gmos.io import atomic_replace
 from gmos.state.config import DEFAULTS
-from gmos.utils import _get_mod_name_from_config  # type: ignore[reportPrivateUsage]
-from gmos.utils import ModConfig, logger
+from gmos.utils import (
+    ModConfig,
+    _get_mod_name_from_config,  # type: ignore[reportPrivateUsage]
+    logger,
+)
 
 # Schema Version
 PROFILE_FORMAT_VERSION = "1.0"

@@ -54,13 +54,18 @@ from gmos.io import (
     atomic_write_bytes,
     atomic_write_copy,
     atomic_write_with_backup,
+    safe_atomic_copy_with_bak,
+    safe_remove,
+    safe_write_text,
 )
 from gmos.io import pck as pck_tools
-from gmos.io import safe_atomic_copy_with_bak, safe_remove, safe_write_text
 from gmos.io.locking import pause_workroot_watcher, resume_workroot_watcher
 from gmos.state import policy
-from gmos.utils import _get_mod_name_from_config  # type: ignore [reportPrivateUsage]
-from gmos.utils import ModConfig, logger
+from gmos.utils import (
+    ModConfig,
+    _get_mod_name_from_config,  # type: ignore [reportPrivateUsage]
+    logger,
+)
 
 
 class ConflictDelegate(Protocol):

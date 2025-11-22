@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 from gmos.core.patcher import resolve_mod_dependencies
-from gmos.utils import ModConfig  # type: ignore [reportPrivateUsage]
-from gmos.utils import _get_mod_name_from_config
+from gmos.utils import (
+    ModConfig,  # type: ignore [reportPrivateUsage]
+    _get_mod_name_from_config,
+)
 
 
 def cfg_for(tmp_path: Path, name: str, deps: Optional[List[str]] = None) -> ModConfig:

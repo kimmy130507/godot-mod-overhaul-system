@@ -26,8 +26,10 @@ from typing import Any, Dict, List, Optional, cast
 
 from gmos.io import atomic_write_with_backup, pck
 from gmos.io.pck import read_pck_header
-from gmos.utils import _safe_spawn  # type: ignore [reportPrivateUsage]
-from gmos.utils import logger
+from gmos.utils import (
+    _safe_spawn,  # type: ignore [reportPrivateUsage]
+    logger,
+)
 
 
 class GodotBridge:

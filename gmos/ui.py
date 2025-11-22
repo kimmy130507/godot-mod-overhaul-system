@@ -78,12 +78,12 @@ from gmos.io import (
 )
 from gmos.state import policy, profiles
 from gmos.state.config import DEFAULTS, get_config_path, load_config, write_config
-from gmos.utils import _get_mod_name_from_config  # type: ignore [reportPrivateUsage]
-from gmos.utils import _safe_spawn  # type: ignore [reportPrivateUsage]
 from gmos.utils import (
     LOG_DIR,
     ROOT_DIR,
     ModConfig,
+    _get_mod_name_from_config,  # type: ignore [reportPrivateUsage]
+    _safe_spawn,  # type: ignore [reportPrivateUsage]
     handle_permission_error,
     logger,
     safe_norm,

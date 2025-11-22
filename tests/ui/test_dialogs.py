@@ -6,6 +6,7 @@ import tempfile
 import tkinter
 from pathlib import Path
 from typing import Optional, cast
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest import MonkeyPatch
@@ -336,23 +337,32 @@ def test_permission_dialog_shows(monkeypatch: MonkeyPatch) -> None:
 
 def test_hunkviewer_headless_auto_accept_strict() -> None:
     """Headless HunkViewer should return the exact merged text when auto-accepting hunks."""
-    from gmos.core.patcher import apply_hunks
-    from gmos.ui import HunkViewer
 
-    orig = "line1\nline2\nline3\n"
-    new = "line1\nLINE2_MODIFIED\nline3\n"
+    # MOCK TKINTER: Prevent "TclError: no display name" on CI
+    with patch("tkinter.Toplevel"), patch("tkinter.Tk"):
+        from gmos.core.patcher import apply_hunks
+        from gmos.ui import HunkViewer
 
-    hv = HunkViewer(None, orig, new)
-    merged = hv.show_modal(headless_auto_accept=True)
+        orig = "line1\nline2\nline3\n"
+        new = "line1\nLINE2_MODIFIED\nline3\n"
 
-    assert isinstance(merged, str)
+        # Instantiate safely (Toplevel __init__ is mocked)
+        hv = HunkViewer(None, orig, new)
 
-    # call with explicit default selection (apply all hunks)
-    expected = apply_hunks(orig, new, selected_hunk_indices=None)
+        # Mock the destroy method since the real one wraps a tk command
+        hv.destroy = MagicMock()  # type: ignore
 
-    # Exact equality check
-    assert merged == expected
-    assert merged != orig
-    # Ensure no conflict markers remain
-    for marker in ("<<<<<<<", "=======", ">>>>>>>"):
-        assert marker not in merged
+        # Run the logic we actually want to test
+        merged = hv.show_modal(headless_auto_accept=True)
+
+        assert isinstance(merged, str)
+
+        # call with explicit default selection (apply all hunks)
+        expected = apply_hunks(orig, new, selected_hunk_indices=None)
+
+        # Exact equality check
+        assert merged == expected
+        assert merged != orig
+        # Ensure no conflict markers remain
+        for marker in ("<<<<<<<", "=======", ">>>>>>>"):
+            assert marker not in merged

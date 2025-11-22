@@ -27,8 +27,12 @@ from gmos.core.patcher import (
     validate_mod_config,
 )
 from gmos.state import policy
-from gmos.utils import _get_mod_name_from_config  # type: ignore [reportPrivateUsage]
-from gmos.utils import ModConfig, logger, safe_norm
+from gmos.utils import (
+    ModConfig,
+    _get_mod_name_from_config,  # type: ignore [reportPrivateUsage]
+    logger,
+    safe_norm,
+)
 
 
 @dataclass

@@ -12,8 +12,10 @@ from pathlib import Path
 import pytest
 
 from gmos import utils
-from gmos.core.patcher import _res_to_path  # type: ignore [reportPrivateUsage]
-from gmos.core.patcher import ensure_within
+from gmos.core.patcher import (
+    _res_to_path,  # type: ignore [reportPrivateUsage]
+    ensure_within,
+)
 from gmos.io import atomic_copy_with_single_bak, atomic_write_bytes, atomic_write_copy
 from gmos.io.locking import (
     acquire_app_lock,
@@ -215,7 +217,7 @@ def test_run_checked_string_no_shell() -> None:
 def test_run_checked_shell_true_string() -> None:
     # shell=True path (POSIX-only test)
     cmd = "echo SHELL_OK"
-    proc = utils.run_checked(cmd, shell=True)
+    proc = utils.run_checked(cmd, shell=True)  # nosec B604
     assert "SHELL_OK" in proc.stdout
 
 
