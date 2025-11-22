@@ -129,6 +129,10 @@ def test_replace_with_retries_fallback(
     assert dst.read_bytes() == b"abc"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows CI filesystem handles/antivirus causes flaky PermissionErrors on concurrent writes",
+)
 def test_concurrent_per_path_locking(tmp_path: Path) -> None:
     atomic_copy = resolve_symbol(ATOMIC_COPY_SYMBOLS)
     if atomic_copy is None:
