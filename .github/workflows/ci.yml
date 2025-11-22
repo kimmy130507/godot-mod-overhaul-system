@@ -18,11 +18,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: [3.10, 3.11, 3.12]
+        python-version: ["3.10", "3.11", "3.12"]
         include:
           # Run static checks and coverage only once on this specific config
           - os: ubuntu-latest
-            python-version: 3.12
+            python-version: "3.12"
             static_checks: true
     timeout-minutes: 30
 
