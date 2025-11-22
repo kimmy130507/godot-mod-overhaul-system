@@ -1,38 +1,59 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
-from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
+import os
+import sys
+from PyInstaller.building.build_main import Analysis, PYZ, EXE
 
 block_cipher = None
 
-# Build the single-file application from the repository root module gmos.py
+# Define the new asset root
+ASSET_ROOT = os.path.join('gmos', 'assets')
+
+datas = []
+# Recursively include all assets
+if os.path.exists(ASSET_ROOT):
+    datas.append((ASSET_ROOT, 'gmos/assets'))
+
+# Platform-specific icon
+icon_file = None
+if sys.platform == "darwin":
+    icon_file = os.path.join(ASSET_ROOT, 'gmos.icns')
+elif sys.platform.startswith("win"):
+    icon_file = os.path.join(ASSET_ROOT, 'gmos.ico')
+
 a = Analysis(
-    ['gmos.py'],         
-    pathex=['.'],        # ensure repo root is in search path
+    ['gmos/__main__.py'],
+    pathex=['.'],
     binaries=[],
-    datas=collect_data_files('.', include_py_files=False),
-    hiddenimports=[],
+    datas=datas,
+    hiddenimports=['gmos.ui'],
     hookspath=[],
     runtime_hooks=[],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
     cipher=block_cipher,
+    noarchive=False,
 )
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
 exe = EXE(
     pyz,
     a.scripts,
-    exclude_binaries=True,
-    name='gmos',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    console=False,
-)
-coll = COLLECT(
-    exe,
     a.binaries,
     a.zipfiles,
     a.datas,
+    [],
+    name='gmos',
+    debug=False,        
+    bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    name='gmos',
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False, # GUI mode
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=icon_file
 )

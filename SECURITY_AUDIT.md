@@ -1,26 +1,31 @@
 # Security Audit Checklist
 
+This document tracks the implementation status of critical security controls in GMOS.
+
 ## Path Safety
-- [ ] `ensure_within` rejects absolute and parent-traversal paths.
-- [ ] All file joins use `os.path.join` or `Path` followed by `resolve()` and verification.
-- [ ] Mods cannot write outside the work root.
+- [x] `ensure_within` rejects absolute and parent-traversal paths.
+- [x] All file joins use `os.path.join` or `Path` followed by `resolve()` verification.
+- [x] Mods cannot write outside the work root (Enforced by `gmos.core.patcher`).
 
 ## Manifest Validation
-- [ ] `mod.mos` parsing rejects shell metacharacters.
-- [ ] Absolute or UNC paths forbidden in `[FileReplace]`.
+- [x] `mod.mos` parsing rejects shell metacharacters (INI parser used).
+- [x] Absolute or UNC paths forbidden in `[FileReplace]` validation logic.
 
 ## Code Execution
-- [ ] No `eval`, `exec`, or `subprocess` with untrusted strings.
-- [ ] Script patching only manipulates text; no runtime import of mod code.
+- [x] No `eval`, `exec`, or `subprocess` with untrusted strings.
+- [x] Script patching uses Regex substitution (`re.sub`); no runtime import of mod code.
+- [x] `OS.execute` calls are rewritten to `GMOS_Sandbox.secure_execute`.
 
-## Permissions
-- [ ] On startup, loader checks write permission for `work_root`.
-- [ ] Fails with clear message if permission denied.
+## Permissions & Locking
+- [x] On startup, `gmos.io.locking` acquires a singleton lock (`gmos.lock`).
+- [x] File operations use `gmos.io.base` thread locks to prevent internal races.
+- [x] Atomic writes (`.tmp` -> `.bak` -> target) prevent file corruption.
 
 ## External Calls
-- [ ] Network access disabled or explicit.
-- [ ] Paths and environment sanitized before invoking external tools.
+- [x] `GodotBridge` sanitizes paths before passing them to `gdre_tools`.
+- [x] No automatic network access is implemented in the core.
 
-## CI
-- [ ] Bandit runs on each push.
-- [ ] High-severity findings block merge.
+## CI/CD Security
+- [x] `Bandit` runs on each push (`workflows/ci.yml`).
+- [x] `Safety` checks dependencies for CVEs.
+- [x] Windows binaries are GPG signed (`workflows/build-windows-gpg.yml`).

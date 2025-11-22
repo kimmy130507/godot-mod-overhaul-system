@@ -7,13 +7,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  package:
-    name: Build and publish binary (matrix)
+  # --- Job 1: Build Binaries (EXE/ELF/App) ---
+  package-binaries:
+    name: Build binary (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: [3.x]
+        python-version: ["3.11"] # Pinned for stability
     timeout-minutes: 30
 
     steps:
@@ -33,25 +34,112 @@ jobs:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml','**/requirements-dev.txt') }}
 
-      - name: Install build deps
+      - name: Install Python build deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
           pip install pyinstaller
+        shell: bash
 
-      - name: Build with PyInstaller (using spec at repo root)
+      # --- Icon Generation Steps ---
+      
+      - name: Install image tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y inkscape imagemagick icnsutils librsvg2-bin
+        shell: bash
+
+      - name: Install image tools (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update || true
+          brew install --quiet inkscape imagemagick || true
+        shell: bash
+
+      - name: Install image tools (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install -y inkscape imagemagick || Write-Host "choco install may have failed or already installed."
+
+      - name: Export PNGs from SVG (all OS)
+        run: |
+          mkdir -p gmos/assets/icons
+          echo "Exporting PNG sizes from SVG..."
+          sizes=(1024 512 256 128 64 48 32 24 16)
+          for s in "${sizes[@]}"; do
+            inkscape gmos/assets/gmos.svg --export-type=png --export-filename=gmos/assets/icons/icon-${s}.png --export-width=${s} --export-height=${s}
+          done
+        shell: bash
+
+      - name: Build .ico (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          convert \
+            gmos/assets/icons/icon-256.png \
+            gmos/assets/icons/icon-128.png \
+            gmos/assets/icons/icon-64.png \
+            gmos/assets/icons/icon-48.png \
+            gmos/assets/icons/icon-32.png \
+            gmos/assets/icons/icon-24.png \
+            gmos/assets/icons/icon-16.png \
+            gmos/assets/gmos.ico
+        shell: bash
+
+      - name: Build .ico (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $magick = (Get-Command magick -ErrorAction SilentlyContinue)
+          if ($null -eq $magick) { Write-Error "ImageMagick 'magick' not found"; exit 1 }
+          magick `
+            gmos/assets/icons/icon-256.png `
+            gmos/assets/icons/icon-128.png `
+            gmos/assets/icons/icon-64.png `
+            gmos/assets/icons/icon-48.png `
+            gmos/assets/icons/icon-32.png `
+            gmos/assets/icons/icon-24.png `
+            gmos/assets/icons/icon-16.png `
+            gmos\\assets\\gmos.ico
+
+      - name: Build .icns (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          rm -rf MyIcon.iconset || true
+          mkdir -p MyIcon.iconset
+          cp gmos/assets/icons/icon-16.png  MyIcon.iconset/icon_16x16.png
+          cp gmos/assets/icons/icon-32.png  MyIcon.iconset/icon_16x16@2x.png
+          cp gmos/assets/icons/icon-32.png  MyIcon.iconset/icon_32x32.png
+          cp gmos/assets/icons/icon-64.png  MyIcon.iconset/icon_32x32@2x.png
+          cp gmos/assets/icons/icon-128.png MyIcon.iconset/icon_128x128.png
+          cp gmos/assets/icons/icon-256.png MyIcon.iconset/icon_128x128@2x.png
+          cp gmos/assets/icons/icon-256.png MyIcon.iconset/icon_256x256.png
+          cp gmos/assets/icons/icon-512.png MyIcon.iconset/icon_256x256@2x.png
+          cp gmos/assets/icons/icon-512.png MyIcon.iconset/icon_512x512.png
+          cp gmos/assets/icons/icon-1024.png MyIcon.iconset/icon_512x512@2x.png
+          iconutil -c icns MyIcon.iconset -o gmos/assets/gmos.icns
+          rm -rf MyIcon.iconset
+        shell: bash
+
+      # --- Build & Packaging ---
+
+      - name: Build with PyInstaller
         run: |
           pyinstaller --clean --noconfirm gmos.spec
+        shell: bash
 
-      - name: Package artifact on Linux / macOS
+      - name: Package artifact (Linux/macOS)
         if: runner.os != 'Windows'
-        id: package_artifact
+        id: package_artifact_nix
         run: |
           ART="gmos-${{ matrix.os }}-${{ github.run_number }}.zip"
           zip -r "$ART" dist/*
           echo "artifact=$ART" >> $GITHUB_OUTPUT
+        shell: bash
 
-      - name: Package artifact on Windows
+      - name: Package artifact (Windows)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
@@ -59,8 +147,39 @@ jobs:
           Compress-Archive -Path dist\* -DestinationPath $art -Force
           echo "artifact=$art" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Upload artifact
+      - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gmos-${{ matrix.os }}-${{ github.run_number }}
-          path: ${{ steps.package_artifact.outputs.artifact || format('gmos-{0}-{1}.zip', matrix.os, github.run_number) }}
+          path: ${{ steps.package_artifact_nix.outputs.artifact || format('gmos-{0}-{1}.zip', matrix.os, github.run_number) }}
+
+  # --- Job 2: Build Python Source & Wheel ---
+  build-python-dist:
+    name: Build Python Dist (sdist/wheel)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install build tool
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build sdist and wheel
+        run: |
+          python -m build
+
+      - name: Upload Dist Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmos-pypi-dist
+          path: dist/*

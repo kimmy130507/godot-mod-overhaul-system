@@ -1,0 +1,125 @@
+name: Build Windows EXE + GPG sign
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.x"
+
+jobs:
+  build-sign-upload:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build deps
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install pyinstaller
+
+      - name: Prepare build (ensure icon exists)
+        shell: pwsh
+        run: |
+          if (Test-Path gmos\assets\gmos.ico) { Write-Host "icon OK" } else { Write-Warning "gmos\assets\gmos.ico not found - continuing without custom icon" }
+
+      - name: Build onefile exe with PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller --clean --noconfirm --onefile --icon=gmos\assets\gmos.ico --name gmos gmos\__main__.py
+
+      - name: Diagnostic - list dist
+        shell: pwsh
+        run: |
+          Write-Host "Listing dist folder contents"
+          Get-ChildItem -Path dist -Recurse -Force | Select-Object FullName,Length | Format-Table -AutoSize
+
+      - name: Ensure artifact exists
+        id: check_artifact
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -Path dist\gmos.exe)) {
+            Write-Host "ERROR: expected dist\gmos.exe not found."
+            Write-Host "Detailed dist listing:"
+            Get-ChildItem -Path dist -Recurse -Force | Format-Table -AutoSize
+            exit 1
+          }
+          Write-Host "Found dist\gmos.exe"
+
+      - name: Create SHA256 checksum
+        shell: pwsh
+        run: |
+          $exe = "dist\gmos.exe"
+          $hash = Get-FileHash -Path $exe -Algorithm SHA256
+          $line = "{0}  {1}" -f $hash.Hash, (Split-Path $exe -Leaf)
+          $line | Out-File -FilePath dist\gmos.exe.sha256 -Encoding ascii
+          Write-Host "Created dist\gmos.exe.sha256"
+
+      - name: Install GnuPG (if missing) and prepare GNUPGHOME
+        shell: pwsh
+        env:
+          GPG_KEY_B64: ${{ secrets.GPG_PRIVATE_KEY_B64 }}
+        run: |
+          # Install GnuPG if missing (choco is available on runners)
+          choco install -y gnupg || Write-Host "choco install may have been skipped or already present"
+          $gpgHome = "C:\actions\gpg"
+          if (-not (Test-Path $gpgHome)) { New-Item -ItemType Directory -Path $gpgHome | Out-Null }
+          Write-Host "Using GNUPGHOME: $gpgHome"
+          # Decode base64 secret into privkey.asc safely
+          if (-not $Env:GPG_KEY_B64) {
+            Write-Host "No GPG_PRIVATE_KEY_B64 secret found. Exiting."
+            exit 1
+          }
+          $bytes = [System.Convert]::FromBase64String($Env:GPG_KEY_B64)
+          [System.IO.File]::WriteAllBytes((Join-Path $gpgHome "privkey.asc"), $bytes)
+          # Import into isolated homedir (no pinentry)
+          gpg --batch --homedir $gpgHome --import (Join-Path $gpgHome "privkey.asc")
+          gpg --homedir $gpgHome --list-secret-keys
+          # Zero-out the on-disk privkey after import (best-effort)
+          try { Remove-Item -Path (Join-Path $gpgHome "privkey.asc") -Force } catch { Write-Warning "failed to remove privkey.asc" }
+
+      - name: Create detached ASCII-armored GPG signature
+        shell: pwsh
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          $gpgHome = "C:\actions\gpg"
+          $exe = "dist\gmos.exe"
+          $sig = "dist\gmos.exe.sig.asc"
+          # Create an armored detached signature. Use --pinentry-mode loopback and --passphrase for automation.
+          gpg --homedir $gpgHome --batch --yes --pinentry-mode loopback --passphrase "$env:GPG_PASSPHRASE" --armor --output $sig --detach-sign $exe
+          Write-Host "Signature created: $sig"
+          # verify signature (exit non-zero on failure)
+          gpg --homedir $gpgHome --verify $sig $exe
+          Write-Host "Signature verification succeeded"
+
+      - name: Zip artifact
+        shell: pwsh
+        run: |
+          $zipname = "gmos-windows-${{ github.run_number }}.zip"
+          Compress-Archive -Path dist\gmos.exe -DestinationPath $zipname -Force
+          Write-Host "Created $zipname"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmos-windows-${{ github.run_number }}
+          path: |
+            dist/gmos.exe
+            dist/gmos.exe.sha256
+            dist/gmos.exe.sig.asc
+            gmos-windows-${{ github.run_number }}.zip

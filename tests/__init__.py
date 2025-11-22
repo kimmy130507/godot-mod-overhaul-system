@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2025 Kim
+# SPDX-License-Identifier: GPL-3.0-or-later
 import os
 import sys
 

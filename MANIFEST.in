@@ -1,0 +1,6 @@
+include README.md
+include LICENSE
+recursive-include gmos *.png *.ico *.json *.txt *.yaml *.yml *.ttf *.otf
+recursive-include gmos/assets *
+recursive-include gmos/templates *
+recursive-include gmos/static *

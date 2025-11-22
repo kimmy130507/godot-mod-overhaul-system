@@ -31,3 +31,4 @@ Thumbs.db
 *.tmp
 *.exe
 .ruff_cache/
+.hypothesis

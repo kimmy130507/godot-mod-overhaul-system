@@ -4,33 +4,68 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "godot-mod-overhaul-system"
-version = "1.0"
+version = "1.0.0"
 description = "External mod loader and patcher for Godot games."
-readme = "README.md"
-license = { file = "LICENSE" }
-authors = [
-  { name = "Kim", email = "kimmy130507@gmail.com" }
-]
+readme = { file = "README.md", content-type = "text/markdown" }
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Kim", email = "kimmy130507@gmail.com" }]
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "typing_extensions>=4.0; python_version < '3.11'",
+    "ttkbootstrap",  # Required for UI
+    "psutil"         # Required for IO
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pyfakefs",
+    "hypothesis",
+]
 
 [project.urls]
-"Homepage" = "https://github.com/kimmy130507/godot-mod-overhaul-system"
-"Repository" = "https://github.com/kimmy130507/godot-mod-overhaul-system"
+Homepage = "https://github.com/kimmy130507/godot-mod-overhaul-system"
+Repository = "https://github.com/kimmy130507/godot-mod-overhaul-system"
 
 [project.scripts]
-godot-mod-overhaul-system = "gmos:main"
+gmos = "gmos.main:main"
 
-[tool.flake8]
-max-line-length = 88
-extend-ignore = ["E203", "W503"]
-exclude = [
-  ".git",
-  "__pycache__",
-  ".venv",
-  "venv",
-  "build",
-  "dist",
-  ".eggs",
-  ".github",
-]
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gmos*"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+strict = true
+ignore_missing_imports = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_unused_ignores = false
+
+[tool.ruff]
+line-length = 88
+lint.select = ["E", "W", "F", "I", "B", "C"]
+lint.ignore = ["E501"]
+# optionally: lint.exclude = ["tests/*"]
+
+[tool.ruff.lint.per-file-ignores]
+# B017: assert raises(Exception) is acceptable in generic failure tests
+"tests/*" = ["B017"]
+
+[tool.ruff.lint.mccabe]
+# Bump max complexity to cover validate_mod_config_dict (42)
+max-complexity = 45
+
+[tool.black]
+line-length = 88
+target-version = ['py311']

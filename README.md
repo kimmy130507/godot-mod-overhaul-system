@@ -1,37 +1,126 @@
-# Godot Mod Overhaul System (GMOS)
+# **GMOS — Godot Mod Overhaul System**
 
-Small launcher-time tool. Produces a patched working copy of a Godot game so mods can overlay files and patches without modifying originals.
+**A safe, deterministic, and flexible mod loader for Godot Engine games**
 
-## Install
-From repo root:
-```bash
-pip install -e .
-````
+GMOS generates a patched working copy of a game at launch time, allowing mods to replace assets, patch scripts, and inject logic **without permanently altering the original installation**.
 
-## Quick start
+It features a **"Gold Standard" Architecture** built on five pillars (Core, IO, State, UI, Utils) to ensure robustness, thread safety, and testability.
 
-1. Place the loader next to the game or run the packaged executable.
-2. Configure in UI:
+---
 
-   * Original Game Dir: clean game files
-   * Work Root Dir: patched runtime (default `./game_runtime`)
-   * Mods Dir: folder containing one subfolder per mod
-   * Game Executable: executable name or Launch Override
-3. Click `Refresh Mods` → `Apply Patch` → `Start Game`.
+## **Features**
 
-## Behavior highlights
+* **Atomic Patching:** Never corrupts game files; uses a "Write-Replace" strategy with full rollback.
+* **Deterministic Engine:** Resolves conflicts, dependencies, and load order using stable sorting algorithms.
+* **Active Security:** Rewrites unsafe GDScript (`OS.execute`) at runtime to prevent malicious code execution.
+* **Native PCK Support:** Appends modded assets directly to `.pck` archives using a pure-Python parser (no external tools required for patching).
+* **Static Analysis:** Scans mods for suspicious file access or binary loading before installation.
+* **Developer SDK:** Built-in tooling to decompile games (via GDRE Tools) and auto-generate manifests from workspace diffs.
 
-* Loader never mutates original game files.
-* Work root contains patched runtime and `.bak` backups.
-* Last mod in the enabled list wins on conflicting full-file replacements.
-* Use `Simulate & Diff` to preview changes before applying.
-* See `Mod Author Guide` for full manifest syntax and advanced patch modes.
+---
 
-## Troubleshooting
+## **Quick Start (Players)**
 
-If a mod is invalid the loader marks it `[INVALID]` and skips it. Use `Simulate & Diff` to inspect errors.
+1. Download the **GMOS Executable** (`gmos.exe` or `gmos`) from **Releases**.
+2. Launch GMOS.
+3. Follow the **Setup Wizard** to select your **Game Executable**.
+4. Click **Refresh Mods** → Enable the mods you want.
+5. Click **Apply Patch** → **Start Game**.
 
-## License
-GMOS (Godot Mod Overhaul System) is licensed under the GNU General Public License v3.
-This license applies only to the GMOS tool and its source code.
-Mods and content created for use with GMOS may use any license chosen by their authors.
+See `/docs/UserGuide/` for detailed instructions.
+
+---
+
+## **Quick Start (Mod Authors)**
+
+GMOS mods use a simple folder structure with a `mod.mos` manifest.
+
+```ini
+[ModInfo]
+name = My Mod
+version = 1.0.0
+
+[FileReplace]
+res://scripts/player.gd = patches/player.gd
+```
+
+Full documentation is available in `/docs/ModAuthorGuide/`.
+
+-----
+
+# **Developer SDK (GodotBridge)**
+
+GMOS includes a Python SDK (`gmos.core.sdk`) to automate the modding workflow.
+
+  * **Decompile:** Converts binary assets back to editable source.
+  * **Diff:** Auto-detects changes in your workspace.
+  * **Package:** Generates `mod.mos` and zip files automatically.
+
+*Note: The SDK requires **GDRE Tools** to perform the initial decompilation step.*
+
+See `/docs/ModAuthorGuide/WorkspaceSDK.md`.
+
+-----
+
+# **Security Architecture**
+
+GMOS employs a **Two-Layer Defense** model:
+
+1.  **Static Analyzer (Scanner):** checks files for suspicious patterns (`FileAccess`, `DirAccess`) and warns the user.
+2.  **Runtime Sanitizer (Rewriter):** actively modifies script code to redirect RCE vectors (`OS.execute`) to a safe sandbox proxy (`GMOS_Sandbox`).
+
+See `/docs/Security/Overview.md`.
+
+-----
+
+# **Native PCK Support**
+
+GMOS handles Godot `.pck` files natively. It does **not** require external repackers.
+
+  * **Safe Append:** Modded files are appended to the end of the PCK, and the header index is updated.
+  * **Atomic:** If the write fails, the original PCK is restored instantly.
+
+See `/docs/Internals/PCKRebuild.md`.
+   
+-----
+
+# **Documentation**
+
+Comprehensive documentation is available in the repository:
+
+```
+/docs
+    UserGuide/          # Installation, Troubleshooting
+    ModAuthorGuide/     # Manifests, SDK, Patch Types
+    Internals/          # Deep dives (Locking, Data Schemas)
+    Security/           # Threat Model, Sanitization
+    Development/        # Architecture, CI/CD, Contributing
+```
+
+**Start here:**
+➡ `/docs/Development/Architecture.md`
+
+-----
+
+# **Contributing**
+
+Pull requests are welcome\!
+Please ensure you follow the **5-Pillar Architecture** and run the test suite.
+
+  * **Linting:** `ruff`, `black`, `mypy` (Strict)
+  * **Tests:** `pytest` (Core, IO, UI)
+
+See `/docs/Development/Contributing.md`.
+
+-----
+
+# **Legal Notice**
+
+GMOS does **not** circumvent DRM and cannot run commercial games without their standard executable.
+You are responsible for reviewing and complying with the **EULA** of any game you modify.
+
+-----
+
+# **License**
+
+GMOS is licensed under **GPL-3.0-or-later**.

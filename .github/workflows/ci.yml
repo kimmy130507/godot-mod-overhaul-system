@@ -1,55 +1,135 @@
-name: CI
+name: CI (Code Quality, Tests, Security)
 
 on:
   push:
+    branches: [ main, master ]
   pull_request:
+    branches: [ main, master ]
 
 env:
   FORCE_COLOR: 1
   PYTHONUNBUFFERED: 1
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  test_and_quality:
+    name: Core Checks on ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.x"]
+        os: [ubuntu-latest, windows-latest]
+        python-version: [3.10, 3.11, 3.12]
+        include:
+          # Run static checks and coverage only once on this specific config
+          - os: ubuntu-latest
+            python-version: 3.12
+            static_checks: true
+    timeout-minutes: 30
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Setup Python
+
+      - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-      - name: Install
+
+      - name: Install Dependencies (Linux / macOS)
+        if: runner.os != 'Windows'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
           pip install -e .
-      - name: Lint
+          if [[ "${{ matrix.static_checks }}" == "true" ]]; then
+            pip install pytest-cov black mypy
+          fi
+        shell: bash
+
+      - name: Install Dependencies (Windows)
+        if: runner.os == 'Windows'
+        env:
+          STATIC_CHECKS: ${{ matrix.static_checks }}
         run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+          if ($env:STATIC_CHECKS -eq 'true') {
+            pip install pytest-cov black mypy
+          }
+        shell: pwsh
+        
+      - name: Check license headers
+        run: |
+          python scripts/check_license_headers.py
+        shell: bash        
+
+      - name: Static Analysis (Code Format, Lint, and Types)
+        if: runner.os == 'Linux' && matrix.static_checks
+        run: |
+          echo "### Running Code Formatting Check (Black) ###"
+          black . --check --diff
+          echo "### Running Linting (Ruff/Flake8) ###"
           ruff check .
           flake8 .
-      - name: Run tests
-        run: pytest -q
-      - name: Build binary
-        run: pyinstaller gmos.spec
-      - uses: actions/upload-artifact@v4
+          echo "### Running Type Checking (Mypy) ###"
+          mypy . --ignore-missing-imports
+        shell: bash
+
+      - name: Run Unit Tests (with/without Coverage)
+        env:
+          PYTHONUTF8: 1
+        run: |
+          COVERAGE_ARGS=""
+          if [[ "${{ matrix.static_checks }}" == "true" ]]; then
+            echo "Running tests with coverage..."
+            COVERAGE_ARGS="--cov=. --cov-report=xml:coverage.xml"
+          else
+            echo "Running standard tests..."
+          fi
+          
+          # Run tests with the coverage arguments if set, and JUnit XML for all.
+          pytest -q $COVERAGE_ARGS --junitxml=report_junit.xml --maxfail=1
+        shell: bash
+
+      - name: Upload Coverage Report (if generated)
+        if: always() && matrix.static_checks
+        uses: actions/upload-artifact@v4
         with:
-          name: gmos-binary
-          path: dist/gmos*
+          name: coverage-report-py${{ matrix.python-version }}
+          path: coverage.xml
+
+      - name: Upload pytest junit xml
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-junit-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: report_junit.xml
 
   security:
-    name: Security scan
+    name: Security Scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v4
         with:
           python-version: "3.x"
-      - name: Run bandit
+
+      - name: Install Dependencies for Safety Check
+        run: |
+          pip install -r requirements-dev.txt
+          pip freeze > requirements.txt
+
+      - name: Run Bandit (Static Code Analysis)
         run: |
           pip install bandit
           bandit -r . -x tests -ll
+
+      - name: Run Safety Check (Dependency Vulnerabilities)
+        env:
+          SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
+        run: |
+          pip install safety
+          safety scan --key $SAFETY_API_KEY
