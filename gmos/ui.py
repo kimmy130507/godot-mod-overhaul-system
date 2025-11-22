@@ -53,7 +53,7 @@ except ImportError:
 try:
     import ttkbootstrap as ttkb
 except ImportError:
-    ttkb = None
+    ttkb = None  # type: ignore[assignment]
 from gmos import utils
 from gmos.core import security
 from gmos.core.patcher import (
@@ -1466,12 +1466,12 @@ class App(tk.Tk):
         self.title("Godot Mod Overhaul System (GMOS)")
         self.geometry("1500x1000")
         # --- UI Modernization ---
-        self.style = None
+        self.style: Any = None
         if ttkb:
             # Apply Bootstrap Theme (Dark Mode)
-            self.style = ttkb.Style(theme="darkly")
+            self.style = ttkb.Style(theme="darkly")  # type: ignore[no-untyped-call]
             # Ensure window background matches theme
-            style_any = cast(Any, self.style)
+            style_any = self.style
             self.configure(bg=style_any.colors.bg)
         else:
             # Fallback Standard Theme
@@ -1970,13 +1970,13 @@ class App(tk.Tk):
             place_y = list_y + y + 2
             # disable up/down when at edges
             if idx == 0:
-                self._btn_up.state(["disabled"])  # type: ignore [reportUnknownMemberType]
+                self._btn_up.state(["disabled"])  # type: ignore[no-untyped-call, reportUnknownMemberType]
             else:
-                self._btn_up.state(["!disabled"])  # type: ignore [reportUnknownMemberType]
+                self._btn_up.state(["!disabled"])  # type: ignore[no-untyped-call, reportUnknownMemberType]
             if idx >= self.mod_list_box.size() - 1:
-                self._btn_down.state(["disabled"])  # type: ignore [reportUnknownMemberType]
+                self._btn_down.state(["disabled"])  # type: ignore[no-untyped-call, reportUnknownMemberType]
             else:
-                self._btn_down.state(["!disabled"])  # type: ignore [reportUnknownMemberType]
+                self._btn_down.state(["!disabled"])  # type: ignore[no-untyped-call, reportUnknownMemberType]
             self._arrow_frame.place(x=place_x, y=place_y)
         except Exception:
             self._arrow_frame.place_forget()
@@ -3004,7 +3004,7 @@ class App(tk.Tk):
         self.configure(cursor="watch")
         self.update_idletasks()
         self.append_log("--- Starting Patch Simulation & Diff (full) ---")
-        self.log_notebook.select(1)  # type: ignore [reportUnknownMemberType]
+        self.log_notebook.select(1)  # type: ignore[no-untyped-call, reportUnknownMemberType]
         self.diff_txt.delete("1.0", tk.END)
         # Offload to background
         get_io_executor().submit(self._simulate_worker, game_dir)
@@ -3198,7 +3198,7 @@ class App(tk.Tk):
                     )
 
             # Jump to top of diff tab after completion
-            self.after(0, lambda: self.log_notebook.select(1))  # type: ignore [reportUnknownMemberType]
+            self.after(0, lambda: self.log_notebook.select(1))  # type: ignore[no-untyped-call, reportUnknownMemberType]
 
         except Exception as e:
             # 6. Handle critical errors during the simulation/diff process
