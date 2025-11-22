@@ -42,7 +42,14 @@ def test_atomic_write_bytes_and_permissions(tmp_path: Path) -> None:
     assert dest.exists()
     assert dest.read_bytes() == data
     mode = dest.stat().st_mode & 0o777
-    assert mode in (0o640, 0o644, 0o600)  # allow some platform variance
+    # Windows often defaults to 0o666 (rw-rw-rw-) even if we request restrictive.
+    allowed_modes = (0o640, 0o644, 0o600)
+    if sys.platform == "win32":
+        allowed_modes += (0o666,)
+
+    assert (
+        mode in allowed_modes
+    ), f"Got mode {oct(mode)}, expected one of {[oct(m) for m in allowed_modes]}"
 
 
 def test_atomic_write_copy(tmp_path: Path) -> None:
@@ -209,7 +216,12 @@ def test_run_checked_sequence_simple_print() -> None:
 
 def test_run_checked_string_no_shell() -> None:
     # provide a single string; run_checked will shlex.split() it
-    proc = utils.run_checked(f'{sys.executable} -c "print(12345)"')
+    # On Windows, sys.executable contains backslashes (C:\...).
+    # shlex.split() treats backslashes as escapes, mangling the path.
+    exe = sys.executable.replace("\\", "/")
+
+    proc = utils.run_checked(f'{exe} -c "print(12345)"')
+    assert proc.returncode == 0
     assert "12345" in proc.stdout
 
 

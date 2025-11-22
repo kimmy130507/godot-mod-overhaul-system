@@ -79,7 +79,7 @@ def test_sdk_workflow_detects_changes(fs: Any, monkeypatch: pytest.MonkeyPatch) 
         import hashlib
 
         content = b"var speed = 100"
-        md5 = hashlib.md5(content).digest() # nosec B324
+        md5 = hashlib.md5(content).digest()  # nosec B324
 
         entry = PCKFileEntry(
             path="res://scripts/player.gd",
