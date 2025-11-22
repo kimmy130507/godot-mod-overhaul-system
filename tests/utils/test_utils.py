@@ -248,12 +248,17 @@ def test_run_checked_env_and_cwd() -> None:
         print(os.getcwd())
     """
     )
+    # On Windows CI, Python 3.10 needs SYSTEMROOT to initialize entropy.
+    # We must merge the current environment with our test env.
+    env = os.environ.copy()
+    env["GMOS_TEST_ENV"] = "1"
     with tempfile.TemporaryDirectory() as td:
         proc = utils.run_checked(
-            [sys.executable, "-c", script], env={"GMOS_TEST_ENV": "1"}, cwd=td
+            [sys.executable, "-c", script],
+            env=env,  # Use the merged environment
+            cwd=td,
         )
         out = proc.stdout.strip().splitlines()
-        # first line is env var, second line is cwd
         assert out[0].strip() == "1"
         assert os.path.normpath(out[1].strip()) == os.path.normpath(td)
 

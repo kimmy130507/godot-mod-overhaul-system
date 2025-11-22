@@ -75,7 +75,7 @@ jobs:
           ruff check .
           flake8 .
           echo "### Running Type Checking (Mypy) ###"
-          mypy . --ignore-missing-imports
+          mypy .
         shell: bash
 
       - name: Run Unit Tests (with/without Coverage)

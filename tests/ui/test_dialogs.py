@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #  For Setup wizard, GUI component checks, and dialog logic (permissions, hunk viewing).
 import os
-import sys
 import tempfile
 import tkinter
 from pathlib import Path
-from typing import Optional, cast
-from unittest.mock import MagicMock, patch
+from typing import Any, Optional, cast
+from unittest.mock import patch
 
 import pytest
 from pytest import MonkeyPatch
@@ -349,32 +348,50 @@ def test_permission_dialog_shows(monkeypatch: MonkeyPatch) -> None:
 
 
 def test_hunkviewer_headless_auto_accept_strict() -> None:
-    """Headless HunkViewer should return the exact merged text when auto-accepting hunks."""
+    """
+    Headless HunkViewer should return the exact merged text when auto-accepting hunks.
+    Uses surgical patching to bypass Tkinter initialization entirely.
+    """
+    # 1. Import the real class
+    from gmos.core.patcher import (
+        apply_hunks,
+        generate_unified_diff,
+        parse_unified_diff_hunks,
+    )
+    from gmos.ui import HunkViewer
 
-    # STRICT MOCKING: Completely replace tkinter and ttkbootstrap in sys.modules
-    # This prevents them from initializing or checking for a Display.
-    with patch.dict(
-        sys.modules,
-        {
-            "tkinter": MagicMock(),
-            "tkinter.ttk": MagicMock(),
-            "ttkbootstrap": MagicMock(),
-        },
+    # 2. Define a fake __init__ that populates ONLY what the headless logic needs
+    #    (skipping super().__init__ and all widget creation)
+    def fake_init(self: Any, parent: Any, orig_text: str, new_text: str) -> None:
+        self.orig_text = orig_text
+        self.new_text = new_text
+        self.result = None
+
+        # Logic copied from HunkViewer.__init__ just for state setup
+        self.diff_text = generate_unified_diff(
+            orig_text, new_text, fromfile="original", tofile="replacement"
+        )
+        self.hunks = parse_unified_diff_hunks(self.diff_text)
+
+    # 3. Patch the methods that touch the GUI
+    with (
+        patch.object(HunkViewer, "__init__", side_effect=fake_init, autospec=True),
+        patch.object(HunkViewer, "destroy", autospec=True),
+        patch.object(HunkViewer, "grab_set", autospec=True),
+        patch.object(HunkViewer, "wait_window", autospec=True),
     ):
-        # Now it is safe to import gmos.ui
-        from gmos.core.patcher import apply_hunks
-        from gmos.ui import HunkViewer
 
         orig = "line1\nline2\nline3\n"
         new = "line1\nLINE2_MODIFIED\nline3\n"
 
-        # Instantiate the HunkViewer (which is now inheriting from a MagicMock)
+        # Instantiate (calls fake_init, bypassing Tk)
         hv = HunkViewer(None, orig, new)
-
-        # Verify logic
+        # Run logic
         merged = hv.show_modal(headless_auto_accept=True)
 
+        # Assertions
         assert isinstance(merged, str)
         expected = apply_hunks(orig, new, selected_hunk_indices=None)
         assert merged == expected
         assert merged != orig
+        assert "LINE2_MODIFIED" in merged
