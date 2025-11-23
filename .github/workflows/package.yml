@@ -29,7 +29,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Cache pip
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles(format('{0}/{1}', github.workspace, 'pyproject.toml')) }}-${{ hashFiles(format('{0}/{1}', github.workspace, 'requirements-dev.txt')) }}
@@ -176,7 +176,7 @@ jobs:
           shasum -a 256 "$EXE_PATH" > "${EXE_PATH}.sha256"
 
           # 5. Sign the executable
-          gpg --batch --yes --pinentry-mode loopback --passphrase "${{ secrets.GPG_PASSPHRASE }}" --armor --output "${EXE_PATH}.sig.asc" --detach-sign "${EXE_PATH}"
+          echo "${{ secrets.GPG_PASSPHRASE }}" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --armor --output "${EXE_PATH}.sig.asc" --detach-sign "${EXE_PATH}"
           
           # 6. Verification and Cleanup
           gpg --verify "${EXE_PATH}.sig.asc" "${EXE_PATH}"
