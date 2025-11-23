@@ -182,32 +182,15 @@ jobs:
           gpg --verify "${EXE_PATH}.sig.asc" "${EXE_PATH}"
           rm privkey.asc
         shell: bash
-        
-      - name: Package artifact (Linux/macOS)
-        if: runner.os != 'Windows'
-        id: package_artifact_nix
-        run: |
-          ART="gmos-${{ matrix.os }}-latest.zip"
-          (cd dist && zip -r "../$ART" *)
-          echo "artifact=$ART" >> $GITHUB_OUTPUT
-        shell: bash
-
-      - name: Package artifact (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $art = "gmos-${{ matrix.os }}-latest.zip"
-          Compress-Archive -Path dist\gmos.exe, dist\gmos.exe.sha256, dist\gmos.exe.sig.asc -DestinationPath $art -Force
-          echo "artifact=$art" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4
         with:
-          # Uses the matrix OS in the name (e.g., gmos-windows-latest)
-          name: ${{ format('gmos-{0}-latest', matrix.os) }} 
-          
-          # Sets the path dynamically based on the matrix OS name
-          path: gmos-${{ matrix.os }}-latest.zip
+          # Normalize 'ubuntu-latest' to 'linux-latest' for the artifact name
+          # and uses the original OS name for others (e.g., 'gmos-windows-latest')
+          name: ${{ contains(matrix.os, 'ubuntu') && 'gmos-linux-latest' || format('gmos-{0}-latest', matrix.os) }}
+          # Tell GitHub to zip the contents of the 'dist' directory
+          path: dist/
 
   # --- Job 2: Build Python Source & Wheel ---
   build-python-dist:

@@ -2,8 +2,6 @@
 
 This document details the two-pronged security approach used by GMOS: **Static Analysis** (auditing files before use) and **Runtime Sandboxing** (rewriting scripts to intercept calls).
 
----
-
 # 1. Static Analysis (Scanner)
 
 The `gmos.core.security` module performs static analysis on GDScript files to detect potentially dangerous operations. This is a **passive** check that generates warnings/errors but does not modify the code.
@@ -18,8 +16,6 @@ The analyzer flags the following sequences:
 - **File Deletion**: `DirAccess.remove_absolute` (Godot 4), `Directory.new().remove` (Godot 3)
 - **Network**: `HTTPClient.new`, `HTTPRequest.new`
 - **Binary Loading**: `load(...)` calls containing `.dll`, `.so`, or `.dylib` extensions.
-
----
 
 # 2. Runtime Sandboxing (Sanitization)
 
@@ -37,8 +33,6 @@ Currently, GMOS sanitizes a strict subset of the risks detected by the analyzer.
 Sanitization uses fast **Regex Substitution**. It does not parse the code into an AST.
 - **Input**: `OS.execute("cmd.exe", [])`
 - **Output**: `GMOS_Sandbox.secure_execute("cmd.exe", [])`
-
----
 
 # 3. The Sandbox Singleton
 

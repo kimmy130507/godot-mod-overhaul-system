@@ -2,8 +2,6 @@
 
 Dependency validation ensures that mods load in a consistent, stable order.
 
----
-
 # 1. Validation Rules
 
 GMOS enforces the following rules during the **Mod Loading** phase:
@@ -18,8 +16,6 @@ The topological sorter detects circular dependencies (e.g., A to B to A).
 ### Name Collisions
 GMOS enforces unique mod names.
 - **Action:** If two folders contain mods with the same `Name` in their manifest, both are disabled, and an error is displayed.
-
----
 
 # 2. Ordering Guarantees
 

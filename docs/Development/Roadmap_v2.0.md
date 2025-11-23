@@ -2,8 +2,6 @@
 
 **Objective:** Transition GMOS from a single-game utility into a professional-grade, multi-game manager with integrated network capabilities and advanced optimization.
 
----
-
 # 1. Phase 1: Multi-Game Architecture (The Foundation)
 
 **Goal:** Decouple the application from a single game directory to support managing multiple titles simultaneously.
@@ -22,8 +20,6 @@
 * **Selector View:** A new landing page to select or add game instances.
 * **Dashboard View:** The existing mod management interface, loaded only after an instance is selected.
 
----
-
 # 2. Phase 2: The Network Pillar (The Bridge)
 
 **Goal:** Remove the friction of manual downloads by integrating mod repositories directly into the client.
@@ -37,8 +33,6 @@
 * **Quarantine:** Downloads are staged in a temporary folder.
 * **Auto-Scan:** The `Static Analyzer` immediately scans new downloads.
 * **Consent Gate:** If "High Severity" risks (RCE/Binary) are found, the user must explicitly override a warning dialog to install.
-
----
 
 # 3. Phase 3: Core Optimization (The Performance)
 

@@ -2,8 +2,6 @@
 
 This guide explains how to package and distribute a polished GMOS mod.
 
----
-
 ## 1. Required structure
 
 Your mod folder must contain:
@@ -18,15 +16,11 @@ MyMod/
 
 ```
 
----
-
 ## 2. Naming Rules
 
 - Folder name must be unique  
 - Folder name is used for dependency resolution  
 - Use ASCII-safe names to avoid path issues across OSes  
-
----
 
 ## 3. Ship only your changes
 
@@ -35,8 +29,6 @@ Do **not** include:
 - vanilla game files  
 - unrelated assets  
 - temporary Godot import caches (`.import/`)  
-
----
 
 ## 4. Versioning
 
@@ -48,8 +40,6 @@ Use SemVer:
 
 GMOS displays version and warns on mismatches.
 
----
-
 ## 5. Test Before Shipping
 
 1. In GMOS, click **Simulate & Diff**  
@@ -58,8 +48,6 @@ GMOS displays version and warns on mismatches.
 4. Apply Patch  
 5. Launch game  
 6. Validate behavior with other known mods installed
-
----
 
 ## 6. Distribution
 
@@ -84,8 +72,6 @@ When a user extracts this ZIP into `<GameDir>/mods/`, it should produce:
 <GameDir>/mods/CoolMod/
 
 ```
-
----
 
 ## 7. Legal Note
 

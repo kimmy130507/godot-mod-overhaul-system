@@ -2,8 +2,6 @@
 
 This document describes the deterministic patching process used by GMOS to apply mods.
 
----
-
 # 1. Pipeline Overview
 
 GMOS uses this pipeline for every patch run:
@@ -18,8 +16,6 @@ GMOS uses this pipeline for every patch run:
 8.  **Manifest**: Update `runtime_manifest.json`.
 
 Each stage is deterministic: given the same input files and mod configuration, the output is identical.
-
----
 
 # 2. Stage Breakdown
 
@@ -60,8 +56,6 @@ The final content is written using `atomic_write_with_backup`:
 
 ## 2.7. Sandbox Injection
 Finally, the `SandboxInjector` checks `project.godot`. If the `GMOS_Sandbox` autoload is missing, it is injected, and the payload files (`gmos_sandbox.gd/tscn`) are written to the root.
-
----
 
 # 3. Determinism Guarantee
 

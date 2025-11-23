@@ -2,8 +2,6 @@
 
 GMOS uses pytest and full CI test automation.
 
----
-
 # 1. Running Tests
 
 To run the full suite:
@@ -16,8 +14,6 @@ For coverage (CI equivalent):
 ```sh
 pytest --cov=. --cov-report=term
 ```
-
------
 
 # 2. Test Structure
 
@@ -32,8 +28,6 @@ tests/
     utils/      # Path helpers, Logging
     data/       # Test fixtures (sample mods, dummy PCKs)
 ```
-
------
 
 # 3. Required Test Types
 
@@ -60,8 +54,6 @@ Every PR must include:
 ### Regression Tests
 
 Anything that previously broke production **must** get a regression test case.
-
------
 
 # 4. Deterministic Output
 

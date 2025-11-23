@@ -8,8 +8,6 @@ GMOS enforces a multi-layered security model to ensure that:
 
 This document summarizes GMOS’ defense layers and how they interact.
 
----
-
 # 1. Security Design Principles
 
 ## Least Privilege
@@ -26,8 +24,6 @@ All potentially destructive actions are guarded by:
 - backups (`.bak` files)
 - atomic writes
 - rollback policies
-
----
 
 # 2. Security Layers (Summary)
 

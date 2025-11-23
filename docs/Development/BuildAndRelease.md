@@ -2,8 +2,6 @@
 
 This document describes how to create official GMOS releases.
 
----
-
 # 1. Versioning
 
 GMOS uses semantic versioning:
@@ -11,7 +9,6 @@ GMOS uses semantic versioning:
 
 The single source of truth for the version is **`pyproject.toml`**.
 
----
 
 # 2. Release Steps
 
@@ -52,8 +49,6 @@ The CI pipeline will automatically attach the following artifacts:
   * **SHA256 Checksums**
   * **GPG Signatures** (`.sig.asc`)
 
------
-
 # 3. PyPI Release (Future)
 
 PyPI distribution is currently planned for future releases.
@@ -62,8 +57,6 @@ PyPI distribution is currently planned for future releases.
 python -m build
 twine upload dist/*
 ```
-
------
 
 # 4. Reproducibility
 

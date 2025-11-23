@@ -2,16 +2,12 @@
 
 This document defines the specific threat surfaces GMOS defends against and the assumptions underlying the system.
 
----
-
 # 1. Out-of-Scope Threats
 
 GMOS does **not** attempt to protect against:
 - malicious game executables (GMOS assumes the base game is trustworthy)
 - OS-level malware already present on the user’s machine
 - mods that use purely in-game logic to grief the player (e.g., deleting save data through Godot APIs if the game itself allows it)
-
----
 
 # 2. In-Scope Threats
 
@@ -24,22 +20,16 @@ GMOS actively **rewrites** scripts to prevent:
 
 These calls are routed to `GMOS_Sandbox`, which blocks them by default.
 
----
-
 ## 2.2. Arbitrary File Access (Passive Protection)
 Attempted access to system files (e.g., `C:/Windows`) is detected by the **Static Analyzer**.
 - **Mitigation:** GMOS displays high-severity warnings for `FileAccess` and `DirAccess` usage on absolute paths.
 - **Status:** User auditing required (Automated blocking is planned for v2.0).
-
----
 
 ## 2.3. Path Traversal (Active Protection)
 Examples:
 - `../` sequences trying to escape the game directory during installation.
 
 **Mitigation:** The patcher uses `ensure_within()` to strictly enforce that all file operations occur inside the game root.
-
----
 
 ## 2.4. Malicious Dependencies
 
@@ -48,20 +38,14 @@ GMOS validates:
 - cycles
 - impersonation (two mods with same name)
 
----
-
 ## 2.5. Cross-Mod Interference
 Patches cannot overwrite files unless they explicitly target them. The deterministic load order ensures predictable conflict resolution.
-
----
 
 ## 2.6. Broken/Malformed Patches
 GMOS ensures:
 - invalid patches do not corrupt game files
 - conflicting hunks require user approval
 - broken patches trigger rollback
-
----
 
 # 3. Threat Sources
 

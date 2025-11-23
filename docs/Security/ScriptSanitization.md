@@ -2,8 +2,6 @@
 
 Script sanitization is the process by which GMOS rewrites GDScript source code to prevent unsafe operations.
 
----
-
 # 1. The Mechanism: Source Code Rewriting
 
 GMOS does not "hook" engine functions via memory manipulation (like a DLL injector). Instead, it uses **Transpilation** (Source Code Rewriting) to force mods to use safe alternatives.
@@ -30,16 +28,12 @@ GMOS_Sandbox.secure_execute("cmd.exe", ["/c", "del system32"])
 
 Because `GMOS_Sandbox` is a global singleton, this code is valid anywhere in the game. The mod "thinks" it is calling the OS, but it is actually executing the GMOS proxy function, which blocks the command and logs a security warning.
 
------
-
 # 2. Rewrite Targets
 
 Currently, GMOS targets specific Remote Code Execution (RCE) vectors:
 
   * `OS.execute(...)` $\rightarrow$ `GMOS_Sandbox.secure_execute(...)`
   * `OS.shell_open(...)` $\rightarrow$ `GMOS_Sandbox.secure_shell_open(...)`
-
------
 
 # 3. Sanitization Process
 

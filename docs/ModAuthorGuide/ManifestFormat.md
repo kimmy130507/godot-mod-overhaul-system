@@ -2,8 +2,6 @@
 
 GMOS mod manifests use a strict INI-style format. This file defines metadata, dependencies, and patch instructions.
 
----
-
 ## 1. Required Section: `[General]`
 
 The core metadata section must be named `[General]`.
@@ -23,8 +21,6 @@ Description = Changes balance and adds content.
 | `Author`      | No       | Name or team       |
 | `Description` | No       | UI description     |
 
------
-
 ## 2. Dependencies
 
 Dependencies ensure your mod loads after its requirements.
@@ -35,8 +31,6 @@ requires = CoreLib, SharedAssets
 ```
 
 GMOS resolves dependencies via topological sort **before** applying any patches.
-
------
 
 ## 3. Patch Sections
 
@@ -49,8 +43,6 @@ Supported sections:
   * `[DataPatch]` (Convenience alias for VariablePatch `mode=create`)
 
 They may appear in any order.
-
------
 
 ## 4. Path Rules
 
@@ -69,8 +61,6 @@ res://scripts/player.gd = patches/player_override.gd
 
 **Left side:** target game file (res://)
 **Right side:** file inside your mod folder
-
------
 
 ## 5. Validation
 

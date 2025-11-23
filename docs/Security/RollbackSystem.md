@@ -2,8 +2,6 @@
 
 GMOS ensures that the game installation remains recoverable, even after a failed patch.
 
----
-
 # 1. Backup Policy (Atomic Strategy)
 
 GMOS never modifies a file in-place without a backup.
@@ -16,8 +14,6 @@ GMOS never modifies a file in-place without a backup.
 
 This ensures that at any given moment, either the original or the new file is valid. There is no state where the file is half-written or corrupted.
 
----
-
 # 2. Recovery Mechanism
 
 GMOS does not perform an "automatic undo" immediately upon error (to preserve logs and state for debugging). Instead, it relies on **Revert-on-Start**.
@@ -29,16 +25,12 @@ GMOS does not perform an "automatic undo" immediately upon error (to preserve lo
 
 This guarantees that every patch operation starts from a clean, vanilla state, preventing "mod residue" from accumulating over time.
 
----
-
 # 3. Manual Rollback
 
 Users can trigger a manual cleanup via the **"Revert Game Files"** button in the UI. This:
 1.  Scans the game directory for `.bak` files.
 2.  Restores them to their original names.
 3.  Removes the GMOS temporary files.
-
----
 
 # 4. Scope of Protection
 

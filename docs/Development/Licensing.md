@@ -2,8 +2,6 @@
 
 GMOS is licensed under **GPL-3.0-or-later**.
 
----
-
 # 1. User Responsibilities
 
 Anyone modifying GMOS must:
@@ -11,8 +9,6 @@ Anyone modifying GMOS must:
 - distribute source alongside binaries
 - retain all copyright headers
 - retain all SPDX notices
-
----
 
 # 2. File Header Rules
 
@@ -49,8 +45,6 @@ For all primary source files:
 
 ```
 
----
-
 # 3. Third-Party Tools
 
 GMOS interacts with:
@@ -58,8 +52,6 @@ GMOS interacts with:
 - Godot Engine (MIT License)
 
 These do **not** conflict with GPL-3.
-
----
 
 # 4. Mod License Note
 

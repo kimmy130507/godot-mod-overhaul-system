@@ -8,8 +8,6 @@ This modular design allows for:
 - **Atomic Safety:** All file operations are routed through a dedicated IO layer.
 - **Strict Typing:** The entire codebase adheres to strict MyPy standards.
 
----
-
 # 1. The Five Pillars
 
 ## 1.1. Core (`gmos.core`)
@@ -48,8 +46,6 @@ This modular design allows for:
 * **Logging**: Centralized logging configuration (`gmos.log`).
 * **Paths**: Cross-platform path normalization and constant definitions (`LOG_DIR`, `ROOT_DIR`).
 
----
-
 # 2. Data Flow
 
 1.  **Initialization**: `gmos.main` acquires the app lock via `gmos.io.locking` and initializes the `GmosSession`.
@@ -61,8 +57,6 @@ This modular design allows for:
     * `gmos.core.injection` ensures the sandbox is active.
     * `gmos.core.patcher` applies changes in memory.
     * `gmos.io` writes final files to disk atomically.
-
----
 
 # 3. Key Architectural Patterns
 

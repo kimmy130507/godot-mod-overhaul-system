@@ -2,8 +2,6 @@
 
 This document explains how GMOS modifies the game’s engine configuration to install the security sandbox.
 
----
-
 # 1. Autoload Injection
 
 GMOS modifies `project.godot` by adding a single entry to the `[autoload]` section. This registers the sandbox as a Global Singleton (Autoload), ensuring it is loaded before any other game scripts.
@@ -22,8 +20,6 @@ GMOS_Sandbox="*res://gmos_sandbox.tscn"
 
 This single line is sufficient to activate the security layer globally.
 
------
-
 # 2. Payload Files
 
 The injection system writes two essential files to the game root:
@@ -32,8 +28,6 @@ The injection system writes two essential files to the game root:
 2.  **`gmos_sandbox.tscn`**: A minimal scene file that attaches the script to a Node.
 
 These files are written atomically using GMOS's IO safety wrappers.
-
------
 
 # 3. Injection Process
 
@@ -44,8 +38,6 @@ The `SandboxInjector` class (`gmos/core/injection.py`) handles the process:
 3.  **Verify**: Checks if `GMOS_Sandbox` is already present.
 4.  **Write Payload**: Creates the `.gd` and `.tscn` files.
 5.  **Update Config**: Inserts the autoload key and saves `project.godot`.
-
------
 
 # 4. Removal (Uninstall)
 

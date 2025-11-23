@@ -2,8 +2,6 @@
 
 GMOS uses strict style rules to ensure readability, reproducibility, and stable patch behavior.
 
----
-
 # 1. Formatting
 
 ### Mandatory tools:
@@ -13,8 +11,6 @@ GMOS uses strict style rules to ensure readability, reproducibility, and stable 
 - **mypy**
 
 All code must pass without warnings.
-
----
 
 # 2. Python Style Rules
 
@@ -30,8 +26,6 @@ All code must pass without warnings.
   3. Internal (`gmos.*`)
 - No wildcard imports outside `__init__.py`
 
----
-
 # 3. Type Hints
 
 Everything must be type-annotated.
@@ -43,8 +37,6 @@ Example:
 def load_manifest(path: str) -> dict[str, Any]:
 ```
 
----
-
 # 4. Naming Conventions
 
 | Type      | Format             |
@@ -54,8 +46,6 @@ def load_manifest(path: str) -> dict[str, Any]:
 | Variables | `snake_case`       |
 | Constants | `UPPER_SNAKE_CASE` |
 
----
-
 # 5. Module Structure
 
 Each module must:
@@ -63,8 +53,6 @@ Each module must:
 * have a clear responsibility
 * avoid circular imports
 * be import-safe (`import gmos` must not run heavyweight code)
-
----
 
 # 6. License Headers
 

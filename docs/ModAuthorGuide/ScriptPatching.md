@@ -5,8 +5,6 @@ This section covers how GMOS processes GDScript files:
 - rewriting
 - security enforcement
 
----
-
 # 1. Script Sanitization
 
 Before writing patch results to the runtime directory, GMOS automatically scans `.gd` files for specific Remote Code Execution (RCE) vectors.
@@ -25,8 +23,6 @@ GMOS_Sandbox.secure_shell_open(...)
 This protects the user from malicious mods attempting to run external commands or open phishing links.
 
 *Note: Static analysis (scanning) checks for other risks like FileAccess, but active rewriting currently focuses on these RCE vectors.*
-
------
 
 # 2. Function Wrapping Internals
 
@@ -63,8 +59,6 @@ func jump():
 
 Similar to prefix, but the patch code is appended after the original function body.
 
------
-
 # 3. Variable Extraction
 
 For variable patches:
@@ -80,8 +74,6 @@ GMOS:
 3.  **Replace**: Swaps the entire block (including multiline definitions).
 4.  **Add**: Injects the *inner content* of the source block into the target block (useful for adding items to a list/dictionary).
 5.  **Create**: Appends the entire source block to the end of the target file.
-
------
 
 # 4. Limitations
 

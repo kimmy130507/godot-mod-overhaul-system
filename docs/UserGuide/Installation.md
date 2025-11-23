@@ -2,8 +2,6 @@
 
 This guide explains how to download GMOS, verify it, and prepare your system for modding Godot games.
 
----
-
 ## 1. Download GMOS
 
 GMOS binaries are available on the project’s official GitHub Releases page.
@@ -16,8 +14,6 @@ The build pipeline provides **single-file executables** bundled in a ZIP archive
 Each release includes verification files:
 * `*.sha256` — checksum
 * `*.sig.asc` — GPG detached signature
-
----
 
 ## 2. Verify Integrity (SHA256)
 
@@ -33,8 +29,6 @@ Get-FileHash -Path .\gmos.exe -Algorithm SHA256
 ```
 
 Compare the output hash with the contents of the `.sha256` file provided on the release page. If they do not match, **do not run the program**.
-
------
 
 ## 3. Verify Authenticity (GPG Signature)
 
@@ -52,8 +46,6 @@ gpg --verify gmos.exe.sig.asc gmos.exe
 
 If verification fails, contact the project maintainers immediately.
 
------
-
 ## 4. System Requirements
 
 | Component | Requirement | Notes |
@@ -63,8 +55,6 @@ If verification fails, contact the project maintainers immediately.
 | **GDRE Tools** | **Optional** | Only required if you use the **Developer SDK** to decompile games. |
 | **Godot Editor** | **Optional** | Only required if you are a **Mod Author** creating new mods. |
 | **Python** | **None** | GMOS is a standalone binary; no system Python is needed. |
-
------
 
 ## 5. Directory Preparation
 
@@ -80,8 +70,6 @@ GMOS requires exactly **one** game directory. Inside that directory, GMOS expect
 ```
 
 **Important:** Mods must live inside `<GameDir>/mods/`. Many mod scripts reference assets using paths like `res://mods/...`; placing them elsewhere will break runtime loading.
-
------
 
 ## 6. First-Time Launch
 

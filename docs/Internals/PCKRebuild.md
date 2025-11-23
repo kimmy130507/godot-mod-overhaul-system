@@ -2,15 +2,11 @@
 
 This document describes how GMOS handles Godot PCK (resource package) files using its native, pure-Python parser.
 
----
-
 # 1. Purpose
 
 Some Godot games do not load loose files from the file system, or prioritize the internal `.pck` content over them. In these cases, GMOS must inject modded files directly into the game's main archive (e.g., `Brotato.pck` or `data.pck`).
 
 This functionality is toggled via **Force PCK Patching** in the UI.
-
----
 
 # 2. The Safe-Append Strategy
 
@@ -28,8 +24,6 @@ GMOS does **not** repack the entire PCK from scratch (which would be slow and ri
 * **Speed**: Only writes the new data, not the whole game.
 * **Safety**: If the header write fails, the original data remains untouched (though the file grows). GMOS uses atomic file swaps to prevent corruption.
 
----
-
 # 3. Supported Formats
 
 The `gmos.io.pck` module supports:
@@ -38,8 +32,6 @@ The `gmos.io.pck` module supports:
 
 It automatically detects the format version from the magic header.
 
----
-
 # 4. Integration in Patch Pipeline
 
 When **Force PCK** is enabled:
@@ -47,8 +39,6 @@ When **Force PCK** is enabled:
 2.  It creates a backup of `main.pck` -> `main.pck.bak`.
 3.  It iterates through the VFS and calls `append_file_to_pck` for each file.
 4.  The modified PCK replaces the original.
-
----
 
 # 5. External Tools
 

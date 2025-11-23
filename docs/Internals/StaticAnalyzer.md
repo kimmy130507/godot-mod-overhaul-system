@@ -2,9 +2,6 @@
 
 This document details the architecture of the `gmos.core.security` module, which performs advanced auditing of GDScript code.
 
-
----
-
 # 1. Why a Custom Lexer?
 
 Regex is insufficient for robust security scanning because it cannot easily handle:
@@ -21,8 +18,6 @@ The lexer breaks code into:
 * `DOT` (`.`)
 * `LPAREN` / `RPAREN`
 * `NEWLINE` / `SKIP` (Whitespace)
-
----
 
 # 2. The Analyzer
 
@@ -44,8 +39,6 @@ The `SecurityAnalyzer` consumes the stream of tokens to detect dangerous semanti
 * **Pattern:** `IDENTIFIER(load)` $\to$ `LPAREN` $\to$ `STRING(*.dll | *.so)`
 * **Severity:** **HIGH**
 * **Reason:** Loading native binaries bypasses the GDScript sandbox entirely.
-
----
 
 # 3. Analyzer vs. Sanitizer
 

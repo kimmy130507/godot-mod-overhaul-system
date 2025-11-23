@@ -2,8 +2,6 @@
 
 GMOS uses GitHub Actions for automated validation, testing, and packaging.
 
----
-
 # 1. CI Stages
 
 The pipeline (`workflows/ci.yml`) runs on every push and PR to `main` or `dev`.
@@ -19,8 +17,6 @@ The pipeline (`workflows/ci.yml`) runs on every push and PR to `main` or `dev`.
 4. **Tests**:
    - `pytest` with coverage reporting
 
----
-
 # 2. Packaging
 
 The packaging workflow (`workflows/package.yml`) runs on version tags (`v*`).
@@ -34,8 +30,6 @@ The packaging workflow (`workflows/package.yml`) runs on version tags (`v*`).
    - **Wheel** (`.whl`) for pip installation.
 3. **Checksums**: `SHA256` hashes for verification.
 4. **GPG Signatures**: Detached signatures (`.sig.asc`) for provenance (Windows builds).
-
----
 
 # 3. Build Environment
 

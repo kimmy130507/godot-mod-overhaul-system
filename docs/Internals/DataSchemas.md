@@ -2,9 +2,6 @@
 
 This document defines the JSON structures used by GMOS for configuration, state tracking, and data exchange.
 
-
----
-
 # 1. Configuration (`config.json`)
 
 **Location:** OS-specific user data folder (e.g., `%LOCALAPPDATA%/gmos/config.json`).
@@ -25,8 +22,6 @@ This document defines the JSON structures used by GMOS for configuration, state 
 | `game_dir` | string | Path to the game root directory. |
 | `mods_dir` | string | Path to the `mods/` folder (usually inside `game_dir`). |
 | `legal_accepted` | bool | `true` if the user accepted the first-run disclaimer. |
-
------
 
 # 2. Policy (`user_load_order.json`)
 
@@ -56,8 +51,6 @@ This document defines the JSON structures used by GMOS for configuration, state 
   * **`load_order`**: Defines the explicit priority list. Mods listed later override earlier ones.
   * **`file_rules`**: A dictionary mapping a resource path (`res://...`) to the name of the "Winner" mod. This allows granular conflict resolution (e.g., Mod A wins for script X, but Mod B wins for texture Y).
 
------
-
 # 3. Runtime Manifest (`runtime_manifest.json`)
 
 **Location:** `<GameDir>/runtime_manifest.json`.
@@ -84,8 +77,6 @@ This document defines the JSON structures used by GMOS for configuration, state 
 
   * **`modified_files`**: A flat list of all files GMOS created or modified. The Revert logic iterates this list to restore `.bak` files.
   * **`applied_ops`**: An audit log of operations for debugging.
-
------
 
 # 4. Profile (`gmos_profile.json`)
 

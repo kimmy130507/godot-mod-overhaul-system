@@ -4,16 +4,12 @@ This document explains how GMOS guarantees data integrity through a two-layered 
 
 They do not interact directly but work in tandem to provide full safety.
 
----
-
 # 1. The Two Layers of Defense
 
 | Layer | Scope | Guard Against | Mechanism | Source |
 | :--- | :--- | :--- | :--- | :--- |
 | **Outer** | OS / Filesystem | Multiple GMOS instances | File Lock (`gmos.lock`) | `gmos.io.locking` |
 | **Inner** | Process / RAM | Background Threads | Race conditions | `gmos.io.base` |
-
----
 
 # 2. Outer Defense: Process Safety
 
@@ -31,8 +27,6 @@ They do not interact directly but work in tandem to provide full safety.
 
 This effectively enforces a **Singleton Pattern** at the operating system level.
 
----
-
 # 3. Inner Defense: Thread Safety
 
 **Goal:** Prevent "Thread Conflict" (e.g., The UI thread saves `config.json` at the exact moment a background Patcher thread tries to read it).
@@ -49,8 +43,6 @@ This effectively enforces a **Singleton Pattern** at the operating system level.
 
 ### Usage
 Any internal function that writes to a file (e.g., `atomic_write_with_backup`) first acquires the specific thread lock for that path. This serializes write operations *within* the single running process.
-
----
 
 # 4. Summary: How They Work in Tandem
 

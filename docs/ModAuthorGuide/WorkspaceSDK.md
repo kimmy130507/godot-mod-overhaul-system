@@ -2,8 +2,6 @@
 
 GMOS includes a Python-based SDK for advanced mod authors who want to automate the decompilation, editing, and packaging workflow.
 
----
-
 ## Core Class: `GodotBridge`
 
 The `GodotBridge` class (`gmos.core.sdk`) coordinates the lifecycle of a modding workspace. It handles decompilation via GDRE Tools, manages the Godot Editor process, and performs smart diffing to generate patches.

@@ -6,8 +6,6 @@ GMOS generates a patched working copy of a game at launch time, allowing mods to
 
 It features a **"Gold Standard" Architecture** built on five pillars (Core, IO, State, UI, Utils) to ensure robustness, thread safety, and testability.
 
----
-
 ## **Features**
 
 * **Atomic Patching:** Never corrupts game files; uses a "Write-Replace" strategy with full rollback.
@@ -16,8 +14,6 @@ It features a **"Gold Standard" Architecture** built on five pillars (Core, IO, 
 * **Native PCK Support:** Appends modded assets directly to `.pck` archives using a pure-Python parser (no external tools required for patching).
 * **Static Analysis:** Scans mods for suspicious file access or binary loading before installation.
 * **Developer SDK:** Built-in tooling to decompile games (via GDRE Tools) and auto-generate manifests from workspace diffs.
-
----
 
 ## **Quick Start (Players)**
 
@@ -28,8 +24,6 @@ It features a **"Gold Standard" Architecture** built on five pillars (Core, IO, 
 5. Click **Apply Patch** → **Start Game**.
 
 See `/docs/UserGuide/` for detailed instructions.
-
----
 
 ## **Quick Start (Mod Authors)**
 
@@ -46,9 +40,7 @@ res://scripts/player.gd = patches/player.gd
 
 Full documentation is available in `/docs/ModAuthorGuide/`.
 
------
-
-# **Developer SDK (GodotBridge)**
+## **Developer SDK (GodotBridge)**
 
 GMOS includes a Python SDK (`gmos.core.sdk`) to automate the modding workflow.
 
@@ -60,9 +52,7 @@ GMOS includes a Python SDK (`gmos.core.sdk`) to automate the modding workflow.
 
 See `/docs/ModAuthorGuide/WorkspaceSDK.md`.
 
------
-
-# **Security Architecture**
+## **Security Architecture**
 
 GMOS employs a **Two-Layer Defense** model:
 
@@ -70,8 +60,6 @@ GMOS employs a **Two-Layer Defense** model:
 2.  **Runtime Sanitizer (Rewriter):** actively modifies script code to redirect RCE vectors (`OS.execute`) to a safe sandbox proxy (`GMOS_Sandbox`).
 
 See `/docs/Security/Overview.md`.
-
------
 
 # **Native PCK Support**
 
@@ -81,8 +69,6 @@ GMOS handles Godot `.pck` files natively. It does **not** require external repac
   * **Atomic:** If the write fails, the original PCK is restored instantly.
 
 See `/docs/Internals/PCKRebuild.md`.
-   
------
 
 # **Documentation**
 
@@ -100,9 +86,7 @@ Comprehensive documentation is available in the repository:
 **Start here:**
 ➡ `/docs/Development/Architecture.md`
 
------
-
-# **Contributing**
+## **Contributing**
 
 Pull requests are welcome\!
 Please ensure you follow the **5-Pillar Architecture** and run the test suite.
@@ -112,15 +96,11 @@ Please ensure you follow the **5-Pillar Architecture** and run the test suite.
 
 See `/docs/Development/Contributing.md`.
 
------
-
-# **Legal Notice**
+## **Legal Notice**
 
 GMOS does **not** circumvent DRM and cannot run commercial games without their standard executable.
 You are responsible for reviewing and complying with the **EULA** of any game you modify.
 
------
-
-# **License**
+## **License**
 
 GMOS is licensed under **GPL-3.0-or-later**.

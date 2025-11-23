@@ -8,8 +8,6 @@ GMOS is a GPL-3.0 open-source project. All contributions must comply with:
 - project formatting and testing rules
 - the deterministic behavior requirements of the patching engine
 
----
-
 # 1. Development Environment Setup
 
 ## Requirements
@@ -28,8 +26,6 @@ source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -r requirements-dev.txt
 pip install -e .
 ```
-
------
 
 # 2. Code Quality & Formatting
 
@@ -56,8 +52,6 @@ mypy .
 
 All commits must pass these checks.
 
------
-
 # 3. Branching Strategy
 
 | Branch       | Purpose                       |
@@ -70,8 +64,6 @@ All commits must pass these checks.
 
 PRs should be made against `dev`. Merges to `main` occur only after full CI validation.
 
------
-
 # 4. Contribution Requirements
 
 Every PR must include:
@@ -80,8 +72,6 @@ Every PR must include:
   * test coverage for new code paths
   * no unverified security-impacting changes
   * SPDX license header for every new file
-
------
 
 # 5. Review Process
 

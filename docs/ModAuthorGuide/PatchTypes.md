@@ -2,8 +2,6 @@
 
 GMOS supports three core patch types. Each serves a different purpose and has different merging semantics.
 
----
-
 # 1. FileReplace
 
 Replaces the target file entirely.
@@ -21,8 +19,6 @@ Use this when:
 
 **Adding New Files:**
 To add new assets (e.g., a new sword texture), you do not need a specific "patch" command. Simply include the file in your mod folder and reference it in your scripts using `load("res://mods/MyMod/sword.png")`.
-
------
 
 # 2. VariablePatch
 
@@ -46,8 +42,6 @@ res://player.gd::mana = patches/stats.gd::mana; mode=create
 **Aliases:**
 The sections `[DataAdd]` and `[DataPatch]` are aliases for `VariablePatch` with `mode=create`.
 
------
-
 # 3. FunctionPatch
 
 Modifies or wraps functions.
@@ -68,8 +62,6 @@ GMOS determines behavior by **source function name**:
 
 **⚠️ Critical Warning for Replace Mode:**
 When performing a full replace (no prefix), you **MUST NOT** attempt to rename the function. The source function in your patch file must define the function with the **exact same name** as the target function. Renaming functions during a replace operation is unsupported.
-
------
 
 # Patch Priority
 
