@@ -28,6 +28,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24' 
+
       - name: Cache pip
         uses: actions/cache@v4
         with:
@@ -55,7 +60,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew update || true
-          brew install --quiet inkscape imagemagick || true
+          brew install --quiet inkscape imagemagick create-dmg || true
         shell: bash
 
       - name: Install image tools (Windows)
@@ -131,6 +136,19 @@ jobs:
           pyinstaller --clean --noconfirm gmos.spec
         shell: bash
 
+      - name: Create DMG (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # The create-dmg tool packages the .app bundle into a .dmg file
+          create-dmg \
+            --volname "Package GMOS Installer" \
+            --volicon "gmos/assets/gmos.icns" \
+            --app-drop-link 400 120 \
+            --icon "gmos.app" 150 120 \
+            "dist/GMOS-Installer.dmg" \
+            "dist/"
+        shell: bash
+        
       - name: Create SHA256 Checksum and GPG Sign (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -158,9 +176,11 @@ jobs:
           gpg --verify $sig $exe
           Write-Host "Windows signature and checksum complete."
 
-      - name: GPG Sign Executable (Linux/macOS)
-        if: runner.os == 'Linux' || runner.os == 'macOS'
+      - name: GPG Sign Executable (Linux)
+        # Only runs for Linux, signing the bare executable
+        if: runner.os == 'Linux'
         run: |
+          set -e
           # 1. Prepare Key
           echo "${{ secrets.GPG_PRIVATE_KEY_B64 }}" | base64 --decode > privkey.asc
           
@@ -168,11 +188,9 @@ jobs:
           gpg --batch --import privkey.asc
           
           # 3. Define the Executable Path
-          if [ "${{ runner.os }}" = "Linux" ] || [ "${{ runner.os }}" = "macOS" ]; then
-            EXE_PATH="dist/gmos"
-          fi
+          EXE_PATH="dist/gmos"
 
-          # 4. Create Checksum (using shasum on both runners)
+          # 4. Create Checksum
           shasum -a 256 "$EXE_PATH" > "${EXE_PATH}.sha256"
 
           # 5. Sign the executable
@@ -182,15 +200,51 @@ jobs:
           gpg --verify "${EXE_PATH}.sig.asc" "${EXE_PATH}"
           rm privkey.asc
         shell: bash
+        
+      - name: GPG Sign DMG (macOS)
+        # Runs only for macOS, signing the DMG file
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          # 1. Define the DMG Path
+          DMG_PATH="dist/GMOS-Installer.dmg"
 
-      - name: Upload Binary Artifact
+          # 2. Prepare Key
+          echo "${{ secrets.GPG_PRIVATE_KEY_B64 }}" | base64 --decode > privkey.asc
+          
+          # 3. Import Key
+          gpg --batch --import privkey.asc
+          
+          # 4. Create Checksum for the DMG
+          shasum -a 256 "$DMG_PATH" > "${DMG_PATH}.sha256"
+
+          # 5. Sign the DMG
+          echo '${{ secrets.GPG_PASSPHRASE }}' | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --armor --output "${DMG_PATH}.sig.asc" --detach-sign "${DMG_PATH}"
+          
+          # 6. Verification and Cleanup
+          gpg --verify "${DMG_PATH}.sig.asc" "${DMG_PATH}"
+          rm privkey.asc
+        shell: bash
+
+      - name: Upload Linux/Windows Artifact
+        if: runner.os != 'macOS'
         uses: actions/upload-artifact@v4
         with:
           # Normalize 'ubuntu-latest' to 'linux-latest' for the artifact name
-          # and uses the original OS name for others (e.g., 'gmos-windows-latest')
-          name: ${{ contains(matrix.os, 'ubuntu') && 'gmos-linux-latest' || format('gmos-{0}-latest', matrix.os) }}
+          # and uses the original OS name for others (e.g., 'GMOS-windows-latest')
+          name: ${{ contains(matrix.os, 'ubuntu') && 'GMOS-linux-latest' || format('GMOS-{0}', matrix.os) }}
           # Tell GitHub to zip the contents of the 'dist' directory
           path: dist/
+
+      - name: Upload macOS Artifact (DMG Only)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GMOS-macos-latest
+          path: |
+            dist/GMOS-Installer.dmg
+            dist/GMOS-Installer.dmg.sha256
+            dist/GMOS-Installer.dmg.sig.asc
 
   # --- Job 2: Build Python Source & Wheel ---
   build-python-dist:

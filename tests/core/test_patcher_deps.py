@@ -7,8 +7,8 @@ from typing import Dict, List, Optional, Union
 
 from gmos.core.patcher import resolve_mod_dependencies
 from gmos.utils import (
-    ModConfig,  # type: ignore [reportPrivateUsage]
-    _get_mod_name_from_config,
+    ModConfig,
+    _get_mod_name_from_config,  # type: ignore [reportPrivateUsage]
 )
 
 
