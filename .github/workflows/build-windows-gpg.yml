@@ -69,42 +69,64 @@ jobs:
           $line | Out-File -FilePath dist\gmos.exe.sha256 -Encoding ascii
           Write-Host "Created dist\gmos.exe.sha256"
 
-      - name: Install GnuPG (if missing) and prepare GNUPGHOME
+      - name: Configure GPG and Import Keys
         shell: pwsh
         env:
           GPG_KEY_B64: ${{ secrets.GPG_PRIVATE_KEY_B64 }}
         run: |
-          # Install GnuPG if missing (choco is available on runners)
-          choco install -y gnupg || Write-Host "choco install may have been skipped or already present"
-          $gpgHome = "C:\actions\gpg"
-          if (-not (Test-Path $gpgHome)) { New-Item -ItemType Directory -Path $gpgHome | Out-Null }
-          Write-Host "Using GNUPGHOME: $gpgHome"
-          # Decode base64 secret into privkey.asc safely
+          # 1. Skip Choco.
+          Write-Host "Verifying pre-installed GPG..."
+          gpg --version
+
+          # 2. Create a local folder for GPGHOME
+          # We use the current workspace ($pwd) to avoid absolute path parsing errors 
+          # with MSYS/MinGW versions of GPG.
+          $gpgHomeDir = Join-Path $pwd "gpg_home"
+          New-Item -ItemType Directory -Path $gpgHomeDir -Force | Out-Null
+          
+          # Set the environment variable for the current process
+          $env:GNUPGHOME = $gpgHomeDir
+          Write-Host "Using GNUPGHOME: $env:GNUPGHOME"
+
+          # 3. Decode base64 secret
           if (-not $Env:GPG_KEY_B64) {
             Write-Host "No GPG_PRIVATE_KEY_B64 secret found. Exiting."
             exit 1
           }
+          
+          $keyPath = Join-Path $gpgHomeDir "privkey.asc"
           $bytes = [System.Convert]::FromBase64String($Env:GPG_KEY_B64)
-          [System.IO.File]::WriteAllBytes((Join-Path $gpgHome "privkey.asc"), $bytes)
-          # Import into isolated homedir (no pinentry)
-          gpg --batch --homedir $gpgHome --import (Join-Path $gpgHome "privkey.asc")
-          gpg --homedir $gpgHome --list-secret-keys
-          # Zero-out the on-disk privkey after import (best-effort)
-          try { Remove-Item -Path (Join-Path $gpgHome "privkey.asc") -Force } catch { Write-Warning "failed to remove privkey.asc" }
+          [System.IO.File]::WriteAllBytes($keyPath, $bytes)
+
+          # 4. Import Key
+          # We pass the env var explicitly to the command to ensure persistence in the shell session if needed
+          gpg --batch --import $keyPath
+          gpg --list-secret-keys
+
+          # 5. Cleanup
+          Remove-Item -Path $keyPath -Force
 
       - name: Create detached ASCII-armored GPG signature
         shell: pwsh
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          $gpgHome = "C:\actions\gpg"
+          # Re-define the path logic to match the previous step
+          $gpgHomeDir = Join-Path $pwd "gpg_home"
+          $env:GNUPGHOME = $gpgHomeDir
+          
           $exe = "dist\gmos.exe"
           $sig = "dist\gmos.exe.sig.asc"
-          # Create an armored detached signature. Use --pinentry-mode loopback and --passphrase for automation.
-          gpg --homedir $gpgHome --batch --yes --pinentry-mode loopback --passphrase "$env:GPG_PASSPHRASE" --armor --output $sig --detach-sign $exe
+
+          Write-Host "Signing using GPG Home: $env:GNUPGHOME"
+
+          # Create signature
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$env:GPG_PASSPHRASE" --armor --output $sig --detach-sign $exe
+          
           Write-Host "Signature created: $sig"
-          # verify signature (exit non-zero on failure)
-          gpg --homedir $gpgHome --verify $sig $exe
+          
+          # Verify
+          gpg --verify $sig $exe
           Write-Host "Signature verification succeeded"
 
       - name: Zip artifact
