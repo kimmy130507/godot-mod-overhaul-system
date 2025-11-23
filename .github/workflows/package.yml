@@ -131,12 +131,64 @@ jobs:
           pyinstaller --clean --noconfirm gmos.spec
         shell: bash
 
+      - name: Create SHA256 Checksum and GPG Sign (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GPG_KEY_B64: ${{ secrets.GPG_PRIVATE_KEY_B64 }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          # 1. Checksum
+          $exe = "dist\gmos.exe"
+          $hash = Get-FileHash -Path $exe -Algorithm SHA256
+          $line = "{0}  {1}" -f $hash.Hash, (Split-Path $exe -Leaf)
+          $line | Out-File -FilePath dist\gmos.exe.sha256 -Encoding ascii
+
+          # 2. Import Key
+          $keyPath = "privkey.asc"
+          [System.IO.File]::WriteAllBytes($keyPath, [System.Convert]::FromBase64String($Env:GPG_KEY_B64))
+          gpg --batch --import $keyPath
+          Remove-Item -Path $keyPath -Force
+
+          # 3. Sign
+          $sig = "dist\gmos.exe.sig.asc"
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$env:GPG_PASSPHRASE" --armor --output $sig --detach-sign $exe
+          
+          # 4. Verification
+          gpg --verify $sig $exe
+          Write-Host "Windows signature and checksum complete."
+
+      - name: GPG Sign Executable (Linux/macOS)
+        if: runner.os == 'Linux' || runner.os == 'macOS'
+        run: |
+          # 1. Prepare Key
+          echo "${{ secrets.GPG_PRIVATE_KEY_B64 }}" | base64 --decode > privkey.asc
+          
+          # 2. Import Key
+          gpg --batch --import privkey.asc
+          
+          # 3. Define the Executable Path
+          if [ "${{ runner.os }}" = "Linux" ] || [ "${{ runner.os }}" = "macOS" ]; then
+            EXE_PATH="dist/gmos"
+          fi
+
+          # 4. Create Checksum (using shasum on both runners)
+          shasum -a 256 "$EXE_PATH" > "${EXE_PATH}.sha256"
+
+          # 5. Sign the executable
+          gpg --batch --yes --pinentry-mode loopback --passphrase "${{ secrets.GPG_PASSPHRASE }}" --armor --output "${EXE_PATH}.sig.asc" --detach-sign "${EXE_PATH}"
+          
+          # 6. Verification and Cleanup
+          gpg --verify "${EXE_PATH}.sig.asc" "${EXE_PATH}"
+          rm privkey.asc
+        shell: bash
+        
       - name: Package artifact (Linux/macOS)
         if: runner.os != 'Windows'
         id: package_artifact_nix
         run: |
-          ART="gmos-${{ matrix.os }}-${{ github.run_number }}.zip"
-          zip -r "$ART" dist/*
+          ART="gmos-${{ matrix.os }}-latest.zip"
+          (cd dist && zip -r "../$ART" *)
           echo "artifact=$ART" >> $GITHUB_OUTPUT
         shell: bash
 
@@ -144,15 +196,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $art = "gmos-${{ matrix.os }}-${{ github.run_number }}.zip"
-          Compress-Archive -Path dist\* -DestinationPath $art -Force
+          $art = "gmos-${{ matrix.os }}-latest.zip"
+          Compress-Archive -Path dist\gmos.exe, dist\gmos.exe.sha256, dist\gmos.exe.sig.asc -DestinationPath $art -Force
           echo "artifact=$art" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gmos-${{ matrix.os }}-${{ github.run_number }}
-          path: ${{ steps.package_artifact_nix.outputs.artifact || format('gmos-{0}-{1}.zip', matrix.os, github.run_number) }}
+          # Uses the matrix OS in the name (e.g., gmos-windows-latest)
+          name: ${{ format('gmos-{0}-latest', matrix.os) }} 
+          
+          # Sets the path dynamically based on the matrix OS name
+          path: gmos-${{ matrix.os }}-latest.zip
 
   # --- Job 2: Build Python Source & Wheel ---
   build-python-dist:
