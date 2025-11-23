@@ -33,11 +33,40 @@ jobs:
         with:
           node-version: '24' 
 
+      # Compute hash via Python to bypass "hashFiles" template errors on macOS
+      - name: Compute dependency hash
+        id: dep-hash
+        shell: python
+        run: |
+          import hashlib, os
+          
+          # Files to hash
+          files = ['pyproject.toml', 'requirements-dev.txt']
+          hasher = hashlib.sha256()
+          
+          for fn in files:
+              if os.path.exists(fn):
+                  print(f"Hashing {fn}...")
+                  with open(fn, 'rb') as f:
+                      hasher.update(f.read())
+              else:
+                  print(f"Skipping {fn} (not found)")
+          
+          digest = hasher.hexdigest()
+          print(f"Computed hash: {digest}")
+          
+          # Write to GITHUB_OUTPUT
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"hash={digest}\n")
+
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}-${{ hashFiles('requirements-dev.txt') }}
+          # Use the computed hash from the previous step
+          key: ${{ runner.os }}-pip-${{ steps.dep-hash.outputs.hash }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install Python build deps
         run: |
@@ -158,6 +187,8 @@ jobs:
             "dist/dmg-source/"
         shell: bash
         
+      # --- GPG Signing ---
+
       - name: Create SHA256 Checksum and GPG Sign (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

@@ -39,12 +39,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb
 
+      - name: Compute dependency hash
+        id: dep-hash
+        shell: python
+        run: |
+          import hashlib, os
+          
+          # Files to hash
+          files = ['pyproject.toml', 'requirements-dev.txt']
+          hasher = hashlib.sha256()
+          
+          for fn in files:
+              if os.path.exists(fn):
+                  with open(fn, 'rb') as f:
+                      hasher.update(f.read())
+          
+          digest = hasher.hexdigest()
+          # Write to GITHUB_OUTPUT
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"hash={digest}\n")
+
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}-${{ hashFiles('requirements-dev.txt') }}
-
+          key: ${{ runner.os }}-pip-${{ steps.dep-hash.outputs.hash }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+              
       - name: Install Python deps
         shell: bash
         run: |
