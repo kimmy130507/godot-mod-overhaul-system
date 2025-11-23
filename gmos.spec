@@ -2,18 +2,25 @@
 import os
 import sys
 from PyInstaller.building.build_main import Analysis, PYZ, EXE
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
+
+tmp_ret = collect_all('ttkbootstrap')
+datas = tmp_ret[0]
+binaries = tmp_ret[1]
+hiddenimports = tmp_ret[2]
 
 # Define the new asset root
 ASSET_ROOT = os.path.join('gmos', 'assets')
 
-datas = []
 # Recursively include all assets
 if os.path.exists(ASSET_ROOT):
     datas.append((ASSET_ROOT, 'gmos/assets'))
 
+hiddenimports.append('gmos.ui')
 # Platform-specific icon
+
 icon_file = None
 if sys.platform == "darwin":
     icon_file = os.path.join(ASSET_ROOT, 'gmos.icns')
@@ -23,9 +30,9 @@ elif sys.platform.startswith("win"):
 a = Analysis(
     ['gmos/__main__.py'],
     pathex=['.'],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
-    hiddenimports=['gmos.ui'],
+    hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
