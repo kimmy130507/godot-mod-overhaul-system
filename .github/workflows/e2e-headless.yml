@@ -38,7 +38,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml','**/requirements-dev.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}-${{ hashFiles('**/requirements-dev.txt') }}
 
       - name: Install Python deps
         shell: bash

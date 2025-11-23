@@ -117,16 +117,15 @@ jobs:
       - name: Zip artifact
         shell: pwsh
         run: |
-          $zipname = "gmos-windows-${{ github.run_number }}.zip"
-          Compress-Archive -Path dist\gmos.exe -DestinationPath $zipname -Force
+          $zipname = "gmos-windows-latest-signed.zip"
+          # Compress the three final files into the ZIP artifact
+          Compress-Archive `
+            -Path dist\gmos.exe, dist\gmos.exe.sha256, dist\gmos.exe.sig.asc `
+            -DestinationPath $zipname -Force
           Write-Host "Created $zipname"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: gmos-windows-${{ github.run_number }}
-          path: |
-            dist/gmos.exe
-            dist/gmos.exe.sha256
-            dist/gmos.exe.sig.asc
-            gmos-windows-${{ github.run_number }}.zip
+          name: gmos-windows-latest-signed
+          path: gmos-windows-latest-signed.zip
