@@ -176,7 +176,7 @@ jobs:
           shasum -a 256 "$EXE_PATH" > "${EXE_PATH}.sha256"
 
           # 5. Sign the executable
-          echo "${{ secrets.GPG_PASSPHRASE }}" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --armor --output "${EXE_PATH}.sig.asc" --detach-sign "${EXE_PATH}"
+          echo '${{ secrets.GPG_PASSPHRASE }}' | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 --armor --output "${EXE_PATH}.sig.asc" --detach-sign "${EXE_PATH}"
           
           # 6. Verification and Cleanup
           gpg --verify "${EXE_PATH}.sig.asc" "${EXE_PATH}"
