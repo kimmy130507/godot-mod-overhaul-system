@@ -139,14 +139,23 @@ jobs:
       - name: Create DMG (macOS)
         if: runner.os == 'macOS'
         run: |
-          # The create-dmg tool packages the .app bundle into a .dmg file
+          # 1. Create a clean staging directory for the DMG content
+          mkdir -p dist/dmg-source
+          
+          # 2. Move the App Bundle to staging (so we don't include the raw binary or other junk)
+          mv "dist/GMOS.app" "dist/dmg-source/"
+          
+          # 3. Run create-dmg pointing to the staging folder
           create-dmg \
-            --volname "Package GMOS Installer" \
+            --volname "GMOS Installer" \
             --volicon "gmos/assets/gmos.icns" \
-            --app-drop-link 400 120 \
-            --icon "gmos.app" 150 120 \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --app-drop-link 400 190 \
+            --icon "GMOS.app" 150 190 \
+            --hide-extension "GMOS.app" \
             "dist/GMOS-Installer.dmg" \
-            "dist/"
+            "dist/dmg-source/"
         shell: bash
         
       - name: Create SHA256 Checksum and GPG Sign (Windows)
@@ -157,10 +166,10 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           # 1. Checksum
-          $exe = "dist\gmos.exe"
+          $exe = "dist\GMOS.exe"
           $hash = Get-FileHash -Path $exe -Algorithm SHA256
           $line = "{0}  {1}" -f $hash.Hash, (Split-Path $exe -Leaf)
-          $line | Out-File -FilePath dist\gmos.exe.sha256 -Encoding ascii
+          $line | Out-File -FilePath dist\GMOS.exe.sha256 -Encoding ascii
 
           # 2. Import Key
           $keyPath = "privkey.asc"
@@ -169,7 +178,7 @@ jobs:
           Remove-Item -Path $keyPath -Force
 
           # 3. Sign
-          $sig = "dist\gmos.exe.sig.asc"
+          $sig = "dist\GMOS.exe.sig.asc"
           gpg --batch --yes --pinentry-mode loopback --passphrase "$env:GPG_PASSPHRASE" --armor --output $sig --detach-sign $exe
           
           # 4. Verification
@@ -188,7 +197,7 @@ jobs:
           gpg --batch --import privkey.asc
           
           # 3. Define the Executable Path
-          EXE_PATH="dist/gmos"
+          EXE_PATH="dist/GMOS"
 
           # 4. Create Checksum
           shasum -a 256 "$EXE_PATH" > "${EXE_PATH}.sha256"

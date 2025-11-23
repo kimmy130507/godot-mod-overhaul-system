@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
-from PyInstaller.building.build_main import Analysis, PYZ, EXE
+from PyInstaller.building.build_main import Analysis, PYZ, EXE, BUNDLE
 from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
@@ -50,7 +50,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='gmos',
+    name='GMOS',
     debug=False,        
     bootloader_ignore_signals=False,
     strip=False,
@@ -63,4 +63,18 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=icon_file
+)
+
+app = BUNDLE(
+    exe,
+    name='GMOS.app',
+    icon=icon_file,
+    bundle_identifier='io.github.kimmy130507.gmos',
+    info_plist={
+        'CFBundleName': 'GMOS',
+        'CFBundleDisplayName': 'Godot Mod Overhaul Manager',
+        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleVersion': '1.0.0',
+        'NSHighResolutionCapable': 'True'
+    },
 )
