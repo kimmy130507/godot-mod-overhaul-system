@@ -5,11 +5,14 @@ This guide explains how to download GMOS, verify it, and prepare your system for
 ## 1. Download GMOS
 
 GMOS binaries are available on the project’s official GitHub Releases page.
-The build pipeline provides **single-file executables** bundled in a ZIP archive:
+The build pipeline provides OS-specific archives:
 
-* **Windows**: `gmos.exe`
-* **Linux**: `gmos` (Binary)
-* **macOS**: `gmos` (Binary/Bundle)
+* **Windows**: `GMOS-windows-latest.zip`
+  * Contains: `GMOS.exe`, `GMOS.exe.sha256`, `GMOS.exe.sig.asc`
+* **macOS**: `GMOS-macos-latest.zip`
+  * Contains: `GMOS-Installer.dmg` (Disk Image), signature files.
+* **Linux**: `GMOS-linux-latest.zip`
+  * Contains: `GMOS` (Portable binary), signature files.
 
 Each release includes verification files:
 * `*.sha256` — checksum
@@ -17,15 +20,21 @@ Each release includes verification files:
 
 ## 2. Verify Integrity (SHA256)
 
-### Linux / macOS
+### Linux
 ```sh
-sha256sum -c dist/gmos.sha256
+sha256sum -c GMOS.sha256
+````
+
+### macOS
+
+```sh
+shasum -a 256 -c GMOS-Installer.dmg.sha256
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-Get-FileHash -Path .\gmos.exe -Algorithm SHA256
+Get-FileHash -Path .\GMOS.exe -Algorithm SHA256
 ```
 
 Compare the output hash with the contents of the `.sha256` file provided on the release page. If they do not match, **do not run the program**.
@@ -40,8 +49,22 @@ gpg --import gmos-pub.asc
 
 ### 2. Verify the signature
 
+**Windows:**
+
 ```sh
-gpg --verify gmos.exe.sig.asc gmos.exe
+gpg --verify GMOS.exe.sig.asc GMOS.exe
+```
+
+**macOS:**
+
+```sh
+gpg --verify GMOS-Installer.dmg.sig.asc GMOS-Installer.dmg
+```
+
+**Linux:**
+
+```sh
+gpg --verify GMOS.sig.asc GMOS
 ```
 
 If verification fails, contact the project maintainers immediately.
@@ -74,7 +97,8 @@ GMOS requires exactly **one** game directory. Inside that directory, GMOS expect
 ## 6. First-Time Launch
 
 1.  Download & verify the binary.
-2.  Place `gmos.exe` (or `gmos`) anywhere on your system. It does **not** need to be in the game folder.
+2.  **Windows/Linux:** Place `GMOS.exe` (or `GMOS`) anywhere on your system.
+    **macOS:** Open `GMOS-Installer.dmg` and drag `GMOS.app` to your Applications folder.
 3.  Launch GMOS.
 4.  Follow the **Setup Wizard** to select your game executable.
 
@@ -83,5 +107,5 @@ GMOS requires exactly **one** game directory. Inside that directory, GMOS expect
 You can also run GMOS from the command line:
 
 ```sh
-./gmos --help
+./GMOS --help
 ```

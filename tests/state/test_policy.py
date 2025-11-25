@@ -32,22 +32,23 @@ def test_last_mod_wins_file_replace(fs: Any) -> None:
 
     fs.create_dir(game_dir)
     fs.create_file(f"{game_dir}/icon.png", contents="VANILLA")
+    fs.create_file(f"{game_dir}/project.godot")
 
-    # Mod A setup
+    # Mod A setup - Include [ModInfo]
     fs.create_file(f"{mod_a_dir}/icon_a.png", contents="MOD_A_ICON")
     fs.create_file(
-        f"{mod_a_dir}/mod.mos", contents="[FileReplace]\nres://icon.png = icon_a.png"
+        f"{mod_a_dir}/mod.mos",
+        contents="[ModInfo]\nName=ModA\nVersion=1.0\n[FileReplace]\nres://icon.png = icon_a.png",
     )
 
-    # Mod B setup
+    # Mod B setup - Include [ModInfo]
     fs.create_file(f"{mod_b_dir}/icon_b.png", contents="MOD_B_ICON")
     fs.create_file(
-        f"{mod_b_dir}/mod.mos", contents="[FileReplace]\nres://icon.png = icon_b.png"
+        f"{mod_b_dir}/mod.mos",
+        contents="[ModInfo]\nName=ModB\nVersion=1.0\n[FileReplace]\nres://icon.png = icon_b.png",
     )
 
     # 2. Construct Plan (Mod A then Mod B)
-
-    # Explicit check to satisfy type checker (ModConfig | None -> ModConfig)
     real_cfg_a = parse_mod_config(mod_a_dir)
     real_cfg_b = parse_mod_config(mod_b_dir)
     assert real_cfg_a is not None
@@ -56,7 +57,6 @@ def test_last_mod_wins_file_replace(fs: Any) -> None:
     plan_a = generate_patch_plan(mod_a_dir, real_cfg_a)
     plan_b = generate_patch_plan(mod_b_dir, real_cfg_b)
 
-    # Combined plan: A comes first, B comes second
     full_plan = plan_a + plan_b
 
     # 3. Execute Run
@@ -82,17 +82,19 @@ def test_policy_override_wins(fs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     mod_b_dir = "/mods/ModB"
 
     fs.create_file(f"{game_dir}/script.gd", contents="print('vanilla')")
-
-    # Mod A
+    fs.create_file(f"{game_dir}/project.godot")
+    # Mod A - Include [ModInfo]
     fs.create_file(f"{mod_a_dir}/patch.gd", contents="print('MOD_A')")
     fs.create_file(
-        f"{mod_a_dir}/mod.mos", contents="[FileReplace]\nres://script.gd = patch.gd"
+        f"{mod_a_dir}/mod.mos",
+        contents="[ModInfo]\nName=ModA\nVersion=1.0\n[FileReplace]\nres://script.gd = patch.gd",
     )
 
-    # Mod B
+    # Mod B - Include [ModInfo]
     fs.create_file(f"{mod_b_dir}/patch.gd", contents="print('MOD_B')")
     fs.create_file(
-        f"{mod_b_dir}/mod.mos", contents="[FileReplace]\nres://script.gd = patch.gd"
+        f"{mod_b_dir}/mod.mos",
+        contents="[ModInfo]\nName=ModB\nVersion=1.0\n[FileReplace]\nres://script.gd = patch.gd",
     )
 
     # Mock Policy to favor ModA
@@ -101,7 +103,6 @@ def test_policy_override_wins(fs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(policy, "load_file_rules", mock_rules)
 
-    # Generate Plan
     real_cfg_a = parse_mod_config(mod_a_dir)
     real_cfg_b = parse_mod_config(mod_b_dir)
     assert real_cfg_a and real_cfg_b
@@ -109,22 +110,16 @@ def test_policy_override_wins(fs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     plan_a = generate_patch_plan(mod_a_dir, real_cfg_a)
     plan_b = generate_patch_plan(mod_b_dir, real_cfg_b)
 
-    # Even if we put B *after* A in the plan...
     full_plan = plan_a + plan_b
 
-    # Run
     log = run_patcher(game_dir, full_plan)
 
-    # Verify
     with open(f"{game_dir}/script.gd", "r") as f:
         content = f.read()
 
     assert (
         content == "print('MOD_A')"
     ), "Policy winner ModA should overwrite/prevent ModB"
-
-    # Check that ModB was NOT applied.
-    # The policy filter runs before the patcher executes, so ModB never generates a log entry.
     assert not any(
         "Applying FileReplace from ModB" in line for line in log
     ), "ModB should have been filtered out by policy"
@@ -141,7 +136,6 @@ def test_script_variable_merge(fs: Any) -> None:
     mod_b = "/mods/GravityMod"
 
     # Vanilla Script
-    # Use proper indentation matching 4 spaces
     vanilla_content = (
         "extends Node\n"
         "var speed = 10\n"
@@ -150,19 +144,19 @@ def test_script_variable_merge(fs: Any) -> None:
         "    pass\n"
     )
     fs.create_file(f"{game_dir}/player.gd", contents=vanilla_content)
-
-    # Add newlines to replacement content.
-    # Without \n, the parser concatenates lines (e.g. "var speed=500var gravity=..."), breaking the second patch.
+    fs.create_file(f"{game_dir}/project.godot")
+    # Mod A - Include [ModInfo]
     fs.create_file(f"{mod_a}/speed.gd", contents="var speed = 500\n")
     fs.create_file(
         f"{mod_a}/mod.mos",
-        contents="[VariablePatch]\nres://player.gd::speed = speed.gd::speed; mode=replace",
+        contents="[ModInfo]\nName=SpeedMod\nVersion=1.0\n[VariablePatch]\nres://player.gd::speed = speed.gd::speed; mode=replace",
     )
 
+    # Mod B - Include [ModInfo]
     fs.create_file(f"{mod_b}/grav.gd", contents="var gravity = 0\n")
     fs.create_file(
         f"{mod_b}/mod.mos",
-        contents="[VariablePatch]\nres://player.gd::gravity = grav.gd::gravity; mode=replace",
+        contents="[ModInfo]\nName=GravityMod\nVersion=1.0\n[VariablePatch]\nres://player.gd::gravity = grav.gd::gravity; mode=replace",
     )
 
     cfg_a = parse_mod_config(mod_a)
@@ -176,9 +170,6 @@ def test_script_variable_merge(fs: Any) -> None:
     with open(f"{game_dir}/player.gd", "r") as f:
         final_code = f.read()
 
-    # Debugging output if assertions fail
-    print(f"DEBUG: Final Code:\n{final_code}")
-
     assert "var speed = 500" in final_code
     assert "var gravity = 0" in final_code
-    assert "extends Node" in final_code  # Header preserved
+    assert "extends Node" in final_code

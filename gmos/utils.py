@@ -59,21 +59,12 @@ class ModConfig(TypedDict, total=False):
 
 def _get_mod_name_from_config(mod_config: ModConfig) -> str:
     """Determine mod name. Prefer Metadata 'Name' then folder basename."""
-    # try metadata section lines like "Name = value"
-    sections = mod_config.get("Sections", {}) or {}
-    # case-insensitive lookup
-    for sec_k in sections.keys():
-        if sec_k.lower() == "metadata":
-            section_content = sections[sec_k]
-            if isinstance(section_content, list):
-                for line in section_content:
-                    try:
-                        k, v = [p.strip() for p in line.split("=", 1)]
-                    except ValueError:
-                        continue
-                    if k.lower() == "name" and v:
-                        return v
-    # fallback to folder name of the mod path
+    # Trust the parser to populate 'Name' in the root.
+    top_name = mod_config.get("Name")
+    if top_name:
+        return str(top_name)
+
+    # Fallback to folder name of the mod path
     path = mod_config.get("Path", "") or ""
     return os.path.basename(path) or path
 
@@ -336,7 +327,7 @@ def _safe_spawn(
             logger.exception("_safe_spawn failed (capture): %s", e)
             return {"returncode": 1, "stdout": None, "stderr": str(e)}
     else:
-        # Legacy behavior: return Popen so caller can wait/interact
+        # return Popen so caller can wait/interact (Async mode)
         popen_kwargs_internal: Dict[str, Any] = {
             "cwd": cwd,
             "stdin": subprocess.DEVNULL,
@@ -530,12 +521,6 @@ def retry_on_permission(
                             pass
                         # Continue loop; let user choose again or abort.
                         continue
-                else:
-                    # Legacy fallback: attach chosen dir to exception for caller inspection
-                    try:
-                        cast(Any, last_exc).selected_dir = chosen_dir
-                    except Exception:
-                        pass
                 # retry the op after updating path
                 continue
 

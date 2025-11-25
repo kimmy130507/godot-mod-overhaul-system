@@ -59,8 +59,8 @@ class ProfileManifest(TypedDict):
 def _extract_version(cfg: Dict[str, Any]) -> Optional[str]:
     """Helper to extract version string from mod config metadata."""
     sections = cast(Dict[str, Any], cfg.get("Sections", {}))
-    if sections and "Metadata" in sections:
-        meta_lines = cast(List[str], sections["Metadata"])
+    if sections and "ModInfo" in sections:
+        meta_lines = cast(List[str], sections["ModInfo"])
         for line in meta_lines:
             if line.lower().startswith("version"):
                 try:

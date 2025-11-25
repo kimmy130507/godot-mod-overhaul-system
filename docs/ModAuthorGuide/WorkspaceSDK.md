@@ -4,7 +4,7 @@ GMOS includes a Python-based SDK for advanced mod authors who want to automate t
 
 ## Core Class: `GodotBridge`
 
-The `GodotBridge` class (`gmos.core.sdk`) coordinates the lifecycle of a modding workspace. It handles decompilation via GDRE Tools, manages the Godot Editor process, and performs smart diffing to generate patches.
+The `GodotBridge` class (`gmos.core.sdk`) coordinates the lifecycle of a modding workspace. It handles extraction, decompilation via GDRE Tools, and smart diffing to generate patches.
 
 ### 1. Initialization
 
@@ -19,32 +19,52 @@ bridge = GodotBridge(
     workspace_dir="C:/Games/MyGodotGame/gmos_workspace"
 )
 
-# IMPORTANT: You must configure the path to GDRE Tools for decompilation to work
+# IMPORTANT: You must configure the path to GDRE Tools for the decompilation step
 bridge.set_gdre_tools_path("C:/Tools/gdre_tools.exe")
 ```
 
-### 2. Decompiling (`init_workspace`)
+### 2. Extraction (`init_workspace`)
 
-This method uses the external **GDRE Tools** binary to recover a fully editable project from the game's shipped `data.pck` or executable.
+This method uses GMOS's **internal pure-Python parser** to extract raw files from the game's `.pck` archive.
 
   * **Function:** `bridge.init_workspace()`
   * **What it does:**
       * Locates the main PCK file in `game_dir`.
-      * Runs `gdre_tools --headless --recover ...` to decompile assets.
-      * Converts binary formats (`.gdc` -\> `.gd`, `.stex` -\> `.png`) back to editable source.
-      * Outputs the project into `workspace_dir`.
+      * Extracts all archived files to `workspace_dir` preserving directory structure.
+      * **Note:** This produces *raw* assets (e.g., `.gdc` scripts, `.stex` textures). These are not yet editable.
+
+<!-- end list -->
+
+```python
+# Extract raw files
+count = bridge.init_workspace()
+print(f"Extracted {count} files.")
+```
+
+### 3. Decompilation (`recover_project`)
+
+This method invokes the external **GDRE Tools** binary to convert the raw extracted assets back into an editable Godot project.
+
+  * **Function:** `bridge.recover_project()`
+  * **What it does:**
+      * Runs `gdre_tools --headless --recover ...` on the extracted data.
+      * Converts binary scripts (`.gdc`) back to source (`.gd`).
+      * Converts texture assets (`.stex`) back to standard images (`.png`).
+      * Reconstructs the `project.godot` file.
+
+<!-- end list -->
 
 ```python
 try:
-    logs = bridge.init_workspace()
-    print("Decompilation complete!")
+    logs = bridge.recover_project()
+    print("Decompilation complete! Project is now editable.")
 except Exception as e:
     print(f"Failed to decompile: {e}")
 ```
 
-### 3. Editing (`launch_editor`)
+### 4. Editing (`launch_editor`)
 
-Once the workspace is ready, use this method to open it in the Godot Editor.
+Once the workspace is recovered, use this method to open it in the Godot Editor.
 
   * **Function:** `bridge.launch_editor(editor_exe)`
   * **What it does:** Spawns the Godot Editor process, pointing it directly at the `project.godot` inside your workspace.
@@ -53,7 +73,7 @@ Once the workspace is ready, use this method to open it in the Godot Editor.
 bridge.launch_editor("C:/Godot/godot_v4.0.exe")
 ```
 
-### 4. Exporting (`generate_mod_patch`)
+### 5. Exporting (`generate_mod_patch`)
 
 This is the "Brain" of the SDK. It compares your workspace against the original vanilla PCK to detect changes and generates a GMOS-compatible mod package.
 

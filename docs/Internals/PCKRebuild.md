@@ -10,19 +10,19 @@ This functionality is toggled via **Force PCK Patching** in the UI.
 
 # 2. The Safe-Append Strategy
 
-GMOS does **not** repack the entire PCK from scratch (which would be slow and risky). Instead, it uses a **Safe Append** strategy implemented in `gmos.io.pck`.
+GMOS uses a **Safe Rebuild** strategy implemented in `gmos.io.pck` to ensure atomicity. It does not modify the original file in-place.
 
 ### The Process (`append_file_to_pck`)
 
-1.  **Parse Header**: Reads the PCK header (Magic `GDPC`) and the existing file index.
-2.  **Calculate Offsets**: Determines the end of the current data section.
-3.  **Append Data**: writes the new file data (the modded content) to the end of the PCK file.
-4.  **Update Index**: Rewrites the PCK header and file index to point the resource path (e.g., `res://player.gd`) to the *new* data offset and size.
-5.  **Padding**: Ensures correct byte alignment (usually 16 bytes) as expected by the Godot engine.
+1.  **Stream Copy**: Creates a temporary file (`.tmp_rebuild`).
+2.  **Header Rewrite**: Writes a new header with the updated file index pointing to new offsets.
+3.  **Data Injection**: Streams original data blocks from the source PCK to the temp file.
+4.  **Patch Injection**: Inserts modded file data where appropriate (appending or replacing).
+5.  **Atomic Swap**: Once the rebuild is complete and verified, the temporary file atomically replaces the original `.pck`.
 
 ### Advantages
-* **Speed**: Only writes the new data, not the whole game.
-* **Safety**: If the header write fails, the original data remains untouched (though the file grows). GMOS uses atomic file swaps to prevent corruption.
+* **Zero Corruption Risk**: The original file is never touched until the new version is fully written.
+* **Defragmentation**: Rebuilding the archive naturally removes gaps from previous modifications.
 
 # 3. Supported Formats
 

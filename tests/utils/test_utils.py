@@ -8,6 +8,7 @@ import tempfile
 import textwrap
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,12 +18,7 @@ from gmos.core.patcher import (
     ensure_within,
 )
 from gmos.io import atomic_copy_with_single_bak, atomic_write_bytes, atomic_write_copy
-from gmos.io.locking import (
-    acquire_app_lock,
-    acquire_workroot_lock,
-    release_app_lock,
-    release_platform_lock,
-)
+from gmos.io.locking import acquire_app_lock, release_app_lock, wire_game_dir_locking
 
 
 def test_gmos_importable() -> None:
@@ -77,6 +73,9 @@ def test_ensure_within(tmp_path: Path) -> None:
         ensure_within(str(base), str(outside))
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows exclusive locking prevents external reads"
+)
 def test_file_lock_acquire_and_release(tmp_path: Path) -> None:
     lock_path = str(tmp_path / "testgmos.lock")
     # acquire
@@ -98,17 +97,29 @@ def test_file_lock_acquire_and_release(tmp_path: Path) -> None:
             assert d == "" or d == str(os.getpid())
 
 
-def test_acquire_workroot_lock_and_release(tmp_path: Path) -> None:
+def test_wire_game_dir_locking_and_release(tmp_path: Path) -> None:
     wr = str(tmp_path / "workroot")
     os.makedirs(wr, exist_ok=True)
-    ok = acquire_workroot_lock(wr)
-    assert ok is True
+
+    class MockVar:
+        def get(self) -> str:
+            return wr
+
+        def trace_add(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def trace(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    class MockApp:
+        vars = {"game_dir": MockVar()}
+
+    wire_game_dir_locking(MockApp())  # type:ignore
     # check for common lock artifacts but accept platform variance
     lockfile = os.path.join(wr, ".gmos.lock")
     sockfile = os.path.join(wr, ".gmos.sock")
     # either a platform lock exists OR a lock file exists. We simply assert we can release.
     release_app_lock()
-    release_platform_lock()
     # Allow time for cleanup; some systems may release locks asynchronously
     deadline = time.time() + 0.5
     while time.time() < deadline and (

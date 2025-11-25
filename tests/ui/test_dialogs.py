@@ -198,13 +198,14 @@ def test_mod_info_pane_update_for_config(tmp_path: Path) -> None:
 
     cfg: UIModConfig = {
         "Path": str(tmp_path / "my_mod"),
+        "Name": "Test Mod",
         "Sections": {
-            "Metadata": [
-                "Name = Test Mod",
-                "Version = 1.2.3",
-                "Author = Unit Tester",
-                "Description = A test mod for the info pane",
-            ],
+            "ModInfo": {
+                "Name": "Test Mod",
+                "Version": "1.2.3",
+                "Author": "Unit Tester",
+                "Description": "A test mod for the info pane",
+            },
             "Dependencies": ["requires = base_mod, dep2"],
         },
         "_deps_errors": ["missing dependency: dep2"],

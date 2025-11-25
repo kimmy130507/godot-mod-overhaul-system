@@ -8,7 +8,7 @@ They do not interact directly but work in tandem to provide full safety.
 
 | Layer | Scope | Guard Against | Mechanism | Source |
 | :--- | :--- | :--- | :--- | :--- |
-| **Outer** | OS / Filesystem | Multiple GMOS instances | File Lock (`gmos.lock`) | `gmos.io.locking` |
+| **Outer** | OS / Filesystem | Multiple GMOS instances | File Lock (`.gmos.lock`) | `gmos.io.locking` |
 | **Inner** | Process / RAM | Background Threads | Race conditions | `gmos.io.base` |
 
 # 2. Outer Defense: Process Safety
@@ -17,16 +17,30 @@ They do not interact directly but work in tandem to provide full safety.
 
 ### Implementation
 * **Location:** `gmos.io.locking` (called via `utils` or `main`).
-* **Target:** `logs/gmos.lock` (Singleton lock file).
+* **Target:** Starts at `logs/gmos.lock` (Global), then switches to `<GameDir>/.gmos.lock`.
 * **Technique:** OS-level file locking via `msvcrt` (Windows) or `fcntl` (Linux/macOS).
 
 ### Behavior
-1.  When GMOS starts (CLI or GUI), it attempts to acquire an exclusive lock on `logs/gmos.lock`.
-2.  **Success:** The app launches. The OS guarantees no other process can hold this lock.
-3.  **Failure:** If another GMOS instance is running, the OS denies the request. The new instance detects this and exits immediately with a "GMOS is already running" message.
+1.  **Startup**: GMOS acquires the global `logs/gmos.lock` to initialize safely.
+2.  **Handover**: Once a game is selected, it acquires `.gmos.lock` in the **Game Directory** and releases the global lock.
+3.  **Enforcement**: If another instance holds the lock for *that specific game*, access is denied.
+
+This allows you to open multiple GMOS instances simultaneously, provided they are managing **different games**.
 
 This effectively enforces a **Singleton Pattern** at the operating system level.
 
+### Reliability Features
+To handle real-world edge cases (like slow OS cleanup or user error), the Outer Defense includes:
+
+* **Smart Grace Period (Livelock Prevention):**
+    When restarting the app quickly, the OS may still report the file as "locked" by the previous closing process. Instead of crashing immediately, GMOS detects if the holding process is running and waits **0.5 seconds** for it to exit. This transparently fixes "False Alarm" locking errors.
+
+* **Lock Rejection (Force Revert):**
+    If a user tries to switch the UI to a game that is *already open* in another window, the Lock Manager rejects the acquisition. Crucially, the UI is then **forced to revert** to its previous valid selection. This prevents a "Limbo State" where the UI displays Game B but the backend is still locked to Game A.
+
+* **Startup Sanity Check:**
+    GMOS refuses to acquire a lock or start up if the configured directory does not contain valid game files (`.pck` or `.exe`). This prevents accidental locking of system folders (like `%AppData%`) if the configuration is corrupt or default.
+    
 # 3. Inner Defense: Thread Safety
 
 **Goal:** Prevent "Thread Conflict" (e.g., The UI thread saves `config.json` at the exact moment a background Patcher thread tries to read it).

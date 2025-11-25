@@ -23,7 +23,7 @@ It features a **"Gold Standard" Architecture** built on five pillars (Core, IO, 
 4. Click **Refresh Mods** → Enable the mods you want.
 5. Click **Apply Patch** → **Start Game**.
 
-See `/docs/UserGuide/` for detailed instructions.
+See the [User Guide](docs/UserGuide/) for detailed instructions.
 
 ## **Quick Start (Mod Authors)**
 
@@ -38,7 +38,7 @@ version = 1.0.0
 res://scripts/player.gd = patches/player.gd
 ```
 
-Full documentation is available in `/docs/ModAuthorGuide/`.
+Full documentation is available in the [Mod Author Guide](docs/ModAuthorGuide/).
 
 ## **Developer SDK (GodotBridge)**
 
@@ -50,7 +50,7 @@ GMOS includes a Python SDK (`gmos.core.sdk`) to automate the modding workflow.
 
 *Note: The SDK requires **GDRE Tools** to perform the initial decompilation step.*
 
-See `/docs/ModAuthorGuide/WorkspaceSDK.md`.
+See [Workspace SDK](docs/ModAuthorGuide/WorkspaceSDK.md).
 
 ## **Security Architecture**
 
@@ -59,7 +59,7 @@ GMOS employs a **Two-Layer Defense** model:
 1.  **Static Analyzer (Scanner):** checks files for suspicious patterns (`FileAccess`, `DirAccess`) and warns the user.
 2.  **Runtime Sanitizer (Rewriter):** actively modifies script code to redirect RCE vectors (`OS.execute`) to a safe sandbox proxy (`GMOS_Sandbox`).
 
-See `/docs/Security/Overview.md`.
+See [Security Overview](docs/Security/Overview.md).
 
 # **Native PCK Support**
 
@@ -68,33 +68,30 @@ GMOS handles Godot `.pck` files natively. It does **not** require external repac
   * **Safe Append:** Modded files are appended to the end of the PCK, and the header index is updated.
   * **Atomic:** If the write fails, the original PCK is restored instantly.
 
-See `/docs/Internals/PCKRebuild.md`.
+See [PCK Rebuild Internals](docs/Internals/PCKRebuild.md).
 
 # **Documentation**
 
 Comprehensive documentation is available in the repository:
 
-```
-/docs
-    UserGuide/          # Installation, Troubleshooting
-    ModAuthorGuide/     # Manifests, SDK, Patch Types
-    Internals/          # Deep dives (Locking, Data Schemas)
-    Security/           # Threat Model, Sanitization
-    Development/        # Architecture, CI/CD, Contributing
-```
+* [**UserGuide**](docs/UserGuide/) — Installation, Troubleshooting
+* [**ModAuthorGuide**](docs/ModAuthorGuide/) — Manifests, SDK, Patch Types
+* [**Internals**](docs/Internals/) — Deep dives (Locking, Data Schemas)
+* [**Security**](docs/Security/) — Threat Model, Sanitization
+* [**Development**](docs/Development/) — Architecture, CI/CD, Contributing
 
 **Start here:**
-➡ `/docs/Development/Architecture.md`
+➡ [Architecture Overview](docs/Development/Architecture.md)
 
 ## **Contributing**
 
-Pull requests are welcome\!
+Pull requests are welcome!
 Please ensure you follow the **5-Pillar Architecture** and run the test suite.
 
   * **Linting:** `ruff`, `black`, `mypy` (Strict)
   * **Tests:** `pytest` (Core, IO, UI)
 
-See `/docs/Development/Contributing.md`.
+See [Contributing Guide](docs/Development/Contributing.md).
 
 ## **Legal Notice**
 

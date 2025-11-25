@@ -225,5 +225,9 @@ class GmosSession:
             injector.remove()
             return False
         else:
-            injector.inject()
+            if not injector.inject():
+                raise RuntimeError(
+                    f"Failed to inject sandbox into '{self.game_dir}'.\n"
+                    "Please ensure 'project.godot' exists and that GMOS has write permissions for this folder."
+                )
             return True

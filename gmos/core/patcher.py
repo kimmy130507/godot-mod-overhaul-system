@@ -59,7 +59,7 @@ from gmos.io import (
     safe_write_text,
 )
 from gmos.io import pck as pck_tools
-from gmos.io.locking import pause_workroot_watcher, resume_workroot_watcher
+from gmos.io.locking import pause_game_dir_watcher, resume_game_dir_watcher
 from gmos.state import policy
 from gmos.utils import (
     ModConfig,
@@ -133,11 +133,11 @@ def set_small_file_limit(bytes_count: int) -> None:
 def write_atomic_replace(target_path: str, text: str) -> None:
     """Atomic text replace then clear read cache."""
     try:
-        pause_workroot_watcher()
+        pause_game_dir_watcher()
         time.sleep(0.02)
         atomic_replace(target_path, text)
     finally:
-        resume_workroot_watcher()
+        resume_game_dir_watcher()
     clear_read_cache()
 
 
@@ -150,12 +150,12 @@ def write_atomic_write_copy(src: str, dst: str) -> None:
 def write_atomic_write_with_backup(target_path: str, new_text: str) -> None:
     """Atomic write with single bak, then clear read cache."""
     try:
-        pause_workroot_watcher()
+        pause_game_dir_watcher()
         # tiny cooperative delay so other threads/processes can release handles
         time.sleep(0.02)
         atomic_write_with_backup(target_path, new_text)
     finally:
-        resume_workroot_watcher()
+        resume_game_dir_watcher()
     clear_read_cache()
 
 
@@ -203,20 +203,20 @@ def write_safe_write_text(path: str, text: str) -> None:
 
 # ensure pause/resume of the workroot watcher is always paired.
 @contextmanager
-def _pause_workroot_watcher_ctx() -> Iterator[None]:
+def _pause_game_dir_watcher_ctx() -> Iterator[None]:
     """Context manager that pauses the workroot watcher and always resumes it."""
     try:
-        pause_workroot_watcher()
+        pause_game_dir_watcher()
     except Exception:
         # If pausing fails, just warn and proceed; resume will be attempted later.
-        logger.debug("pause_workroot_watcher() failed (continuing)", exc_info=True)
+        logger.debug("pause_game_dir_watcher() failed (continuing)", exc_info=True)
     try:
         yield
     finally:
         try:
-            resume_workroot_watcher()
+            resume_game_dir_watcher()
         except Exception:
-            logger.debug("resume_workroot_watcher() failed", exc_info=True)
+            logger.debug("resume_game_dir_watcher() failed", exc_info=True)
 
 
 # --- Type Definitions ---
@@ -739,7 +739,7 @@ def generate_patch_plan(
       - FileReplace -> (target_res, source_path)
       - VariablePatch -> (target_res, target_var, source_path, source_var, mode)  # mode in ('replace','add','create')
       - FunctionPatch -> (target_res, target_func, source_path, source_func)
-    DataPatch and DataAdd are emitted as VariablePatch with mode='create'.
+    DataAdd is emitted as VariablePatch with mode='create'.
     """
     plan: List[Tuple[str, str, Tuple[Any, ...]]] = []
     mod_name = mod_config.get("Name", Path(mod_path).name)
@@ -790,11 +790,9 @@ def generate_patch_plan(
         # store normalized 5-tuple for FunctionPatch: (t_res, t_func_or_None, s_path, s_func, mode)
         plan.append((mod_name, "FunctionPatch", (t_res, t_func, s_path, s_func, mode)))
 
-    # DataAdd / DataPatch: treat as request to create a new top-level variable/table
-    data_patch_content = sections.get("DataPatch", [])
+    # DataAdd treat as request to create a new top-level variable/table
     data_add_content = sections.get("DataAdd", [])
     combined_data_lines: List[str] = []
-    combined_data_lines.extend(data_patch_content)
     combined_data_lines.extend(data_add_content)
 
     for line in combined_data_lines:
@@ -807,6 +805,37 @@ def generate_patch_plan(
         )
 
     return plan
+
+
+def _validate_mod_info_section(
+    sections: Dict[str, Any], mod_config: Dict[str, Any]
+) -> List[str]:
+    """Helper to validate the ModInfo section for Name and Version."""
+    errors: List[str] = []
+    mod_info = sections.get("modinfo")
+
+    if mod_info is None:
+        return ["Missing required section: [ModInfo]"]
+
+    # v1 Standard: Strict enforcement of Dict structure for ModInfo
+    if not isinstance(mod_info, dict):
+        return ["[ModInfo] section format invalid (must be key=value pairs)"]
+
+    # Name Check (Top-level or inside ModInfo)
+    has_name = bool(mod_config.get("Name"))
+    mi_dict = cast(Dict[str, Any], mod_info)
+
+    if not has_name and mi_dict.get("Name"):
+        has_name = True
+
+    if not has_name:
+        errors.append("[ModInfo] missing required field: Name")
+
+    # Version Check
+    if not mi_dict.get("Version"):
+        errors.append("[ModInfo] missing required field: Version")
+
+    return errors
 
 
 def _validate_mod_config_dict(mod_config: Dict[str, Any]) -> List[str]:
@@ -832,14 +861,17 @@ def _validate_mod_config_dict(mod_config: Dict[str, Any]) -> List[str]:
             "filereplace",
             "variablepatch",
             "functionpatch",
-            "datapatch",
             "dataadd",
             "dependencies",
-            "metadata",
+            "modinfo",
         }
         for sec in raw_sections.keys():
             if str(sec).lower() not in allowed:
                 errors.append(f"disallowed section: [{sec}]")
+
+        # STRICT VALIDATION: ModInfo Name and Version are mandatory.
+        # This ensures compatibility with future auto-updaters and mod managers.
+        errors.extend(_validate_mod_info_section(sections, mod_config))
 
         def validate_resource_target(res_target: str) -> Optional[str]:
             try:
@@ -956,16 +988,10 @@ def _validate_mod_config_dict(mod_config: Dict[str, Any]) -> List[str]:
                 if not os.path.exists(s_path):
                     errors.append(f"FunctionPatch source not found: {s_path}")
 
-        # DataAdd / DataPatch
-        dp_lines_any = sections.get("datapatch", [])
+        # DataAdd
         da_lines_any = sections.get("dataadd", [])
         combined_data_lines: List[str] = []
 
-        if isinstance(dp_lines_any, list):
-            dp_list: List[object] = cast(List[object], dp_lines_any)
-            for item in dp_list:
-                if isinstance(item, str):
-                    combined_data_lines.append(item)
         if isinstance(da_lines_any, list):
             da_list: List[object] = cast(List[object], da_lines_any)
             for item in da_list:
@@ -1027,11 +1053,15 @@ def validate_mod_config(
         except Exception as e:
             return False, [f"failed to parse manifest: {e}"]
 
-        sections: Dict[str, List[str]] = {}
+        sections: Dict[str, Any] = {}
         for sec in cp.sections():
-            # create lines in the form "key = value" mirroring prior tests/layout
-            lines = [f"{k} = {v}" for k, v in cp.items(sec)]
-            sections[sec] = lines
+            # Special handling for ModInfo: keep as Dict for validation
+            if sec.lower() == "modinfo":
+                sections["ModInfo"] = dict(cp.items(sec))
+            else:
+                # Legacy behavior for other sections (list of strings)
+                lines = [f"{k} = {v}" for k, v in cp.items(sec)]
+                sections[sec] = lines
 
         cfg: Dict[str, Any] = {
             "Path": os.path.dirname(os.path.abspath(mos_path)),
@@ -2154,6 +2184,32 @@ def run_patcher(
                 log.append(f"ERROR: Game directory not found: {game_dir}")
                 return log
 
+            # 0. Sanity Check: Is this actually a game directory?
+            # We expect at least one .pck file OR an executable OR project.godot
+            try:
+                has_pck = any(
+                    f.endswith(".pck")
+                    for f in os.listdir(game_dir)
+                    if os.path.isfile(os.path.join(game_dir, f))
+                )
+                has_exe = any(
+                    f.endswith(".exe")
+                    for f in os.listdir(game_dir)
+                    if os.path.isfile(os.path.join(game_dir, f))
+                )
+                has_proj = os.path.exists(os.path.join(game_dir, "project.godot"))
+
+                if not (has_pck or has_exe or has_proj):
+                    log.append(f"ERROR: Invalid Game Directory: {game_dir}")
+                    log.append("       No .pck, .exe, or project.godot found.")
+                    log.append(
+                        "       Please configure the correct game path in settings."
+                    )
+                    return log
+            except Exception as e:
+                log.append(f"ERROR: Failed to validate game directory: {e}")
+                return log
+
             # 1. Revert to Vanilla (Clean Slate)
             _emit_progress("Reverting to vanilla...", force=True)
             log.append("--- Reverting to Vanilla State ---")
@@ -2221,21 +2277,11 @@ def run_patcher(
                             }
                         )
                     elif op == "FunctionPatch":
-                        try:
-                            t_res = cast(str, details[0])
-                            t_func = cast(Optional[str], details[1])
-                            s_path = cast(str, details[2])
-                            s_func = cast(str, details[3])
-                            mode = cast(Optional[str], details[4])
-                        except ValueError:
-                            # Backwards compatibility: older format missing mode
-                            t_res, t_func, s_path, s_func = (
-                                cast(str, details[0]),
-                                cast(Optional[str], details[1]),
-                                cast(str, details[2]),
-                                cast(str, details[3]),
-                            )
-                            mode = None  # Fallback for older format if needed
+                        t_res = cast(str, details[0])
+                        t_func = cast(Optional[str], details[1])
+                        s_path = cast(str, details[2])
+                        s_func = cast(str, details[3])
+                        mode = cast(Optional[str], details[4])
 
                         try:
                             lines = patch_function(
@@ -2413,7 +2459,7 @@ def run_patcher(
 
                 # Write patch.log atomically while pausing the workroot watcher to avoid races
                 try:
-                    with _pause_workroot_watcher_ctx():
+                    with _pause_game_dir_watcher_ctx():
                         # small cooperative delay so other threads can release transient handles (Windows)
                         time.sleep(0.02)
                         atomic_replace(log_path, log_content)
@@ -2434,7 +2480,7 @@ def run_patcher(
                 }
                 # Persist runtime_manifest atomically while pausing the workroot watcher
                 try:
-                    with _pause_workroot_watcher_ctx():
+                    with _pause_game_dir_watcher_ctx():
                         time.sleep(0.02)
                         atomic_replace(manifest_path, json.dumps(manifest, indent=2))
                         log.append(f"INFO: runtime_manifest written: {manifest_path}")
@@ -2457,7 +2503,7 @@ def run_patcher(
         # attempt a best-effort manifest/log write before returning
         try:
             manifest_path = os.path.join(game_dir, "runtime_manifest.partial.json")
-            with _pause_workroot_watcher_ctx():
+            with _pause_game_dir_watcher_ctx():
                 time.sleep(0.02)
                 atomic_replace(
                     manifest_path,

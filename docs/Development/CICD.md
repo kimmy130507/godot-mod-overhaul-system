@@ -7,24 +7,25 @@ GMOS uses GitHub Actions for automated validation, testing, and packaging.
 The pipeline (`workflows/ci.yml`) runs on every push and PR to `main` or `dev`.
 
 1. **Setup**: Python 3.10, 3.11, 3.12 on Ubuntu & Windows.
-2. **Static Analysis**:
+2. **Compliance**: Checks for license headers in source files.
+3. **Static Analysis**:
    - `black` (formatting)
    - `ruff` & `flake8` (linting)
    - `mypy` (type checking)
-3. **Security Scan**:
+4. **Security Scan**:
    - `bandit` (AST analysis for python vulnerabilities)
    - `safety` (checks dependencies against CVE database)
-4. **Tests**:
+5. **Tests**:
    - `pytest` with coverage reporting
 
 # 2. Packaging
 
-The packaging workflow (`workflows/package.yml`) runs on version tags (`v*`).
+The packaging workflow (`workflows/package.yml`) runs on version tags (`v*`) and via manual dispatch.
 
 ### Artifacts Produced
-1. **GMOS Application Binary** (`gmos` / `gmos.exe`)
+1. **GMOS Application Binary** (`GMOS` / `GMOS.exe`)
    - A single-file executable built via **PyInstaller**.
-   - Contains the CLI, GUI, and SDK features.
+   - Bundled as a standalone executable (Windows/Linux) or DMG (macOS).
 2. **Python Distributions**:
    - **Source Tarball** (`.tar.gz`) for distribution.
    - **Wheel** (`.whl`) for pip installation.
@@ -34,7 +35,15 @@ The packaging workflow (`workflows/package.yml`) runs on version tags (`v*`).
 # 3. Build Environment
 
 - **Linux**: Ubuntu-latest, uses `inkscape` & `imagemagick` for icon generation.
-- **Windows**: Windows-latest, uses `magick` and `iscc` (if installer needed).
-- **macOS**: macOS-latest, uses `iconutil` for `.icns` generation.
+- **Windows**: Windows-latest, uses `magick`.
+- **macOS**: macOS-latest, uses `iconutil` and `create-dmg`.
 
 All builds rely on `pyproject.toml` and `gmos.spec` for configuration.
+
+# 4. E2E Testing
+
+A separate workflow (`workflows/e2e-headless.yml`) performs headless UI simulation tests.
+
+- **Trigger**: Pushes to `main` or `release/*`.
+- **Environment**: Runs on Linux (via `xvfb`), Windows, and macOS.
+- **Scope**: Validates patcher operations in a simulated GUI environment.

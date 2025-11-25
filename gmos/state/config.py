@@ -292,18 +292,20 @@ class SetupWizard:
 def ensure_config(
     config_path: Optional[str] = None,
     headless_defaults: Optional[Dict[str, Any]] = None,
+    force_setup: bool = False,
 ) -> Dict[str, Any]:
     """
-    Ensure a configuration exists. If not present:
+    Ensure a configuration exists. If not present or force_setup is True:
       - if headless_defaults provided, write them and return
       - otherwise show the GUI SetupWizard in an isolated root (only if needed)
         and return the resulting config or {}.
     """
     p = config_path or get_config_path()
-    cfg = load_config(p)
 
-    if cfg and cfg.get("game_dir"):
-        return cfg
+    if not force_setup:
+        cfg = load_config(p)
+        if cfg and cfg.get("game_dir"):
+            return cfg
 
     if headless_defaults is not None:
         write_config(headless_defaults, p)
@@ -366,19 +368,6 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
                 return cast(Dict[str, Any], json.load(f))
         except Exception:
             return {}
-
-
-def suggest_work_root(exe_path: str) -> str:
-    """
-    Return a suggested work_root given a chosen game executable path.
-    Current policy: suggest a 'mods' directory next to the executable.
-    """
-    if not exe_path:
-        return os.path.join(os.path.expanduser("~"), "mods")
-    exe_dir = os.path.dirname(exe_path)
-    if not exe_dir:
-        exe_dir = os.path.expanduser("~")
-    return os.path.join(exe_dir, "mods")
 
 
 def write_config(cfg: Dict[str, Any], path: Optional[str] = None) -> None:

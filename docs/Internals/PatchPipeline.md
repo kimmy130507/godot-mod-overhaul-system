@@ -49,10 +49,13 @@ As files are processed in memory:
 This ensures that even if a modder writes malicious code, the final script written to the game directory calls the safe sandbox wrapper.
 
 ## 2.6. Atomic Write
-The final content is written using `atomic_write_with_backup`:
-1.  Write to `target.tmp`.
-2.  Rename `target` -> `target.bak` (if no backup exists).
-3.  Rename `target.tmp` -> `target`.
+The final content is written using a robust Write-Replace strategy:
+1.  Stream: Data is written to a temporary file (target.tmp) to prevent partial writes.
+2.  Backup: If a backup doesn't exist, the original is moved to target.bak
+3.  Swap: The temporary file is atomically renamed to target.
+
+**For PCK Mode:**
+GMOS performs a Safe Rebuild. It streams the original PCK content into a new temporary file, injecting modded assets during the stream, and then atomically swaps the new PCK into place. This guarantees the main game archive is never corrupted.
 
 ## 2.7. Sandbox Injection
 Finally, the `SandboxInjector` checks `project.godot`. If the `GMOS_Sandbox` autoload is missing, it is injected, and the payload files (`gmos_sandbox.gd/tscn`) are written to the root.

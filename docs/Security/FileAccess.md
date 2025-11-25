@@ -12,9 +12,7 @@ Mods are expected to:
 
 The GMOS **Static Analyzer** (`gmos.core.security`) scans mod code before patching. It flags the following patterns as potential security risks:
 
-- Writing files (`FileAccess.WRITE`)
 - Deleting files (`DirAccess.remove` / `DirAccess.remove_absolute`)
-- Accessing absolute paths (e.g., `C:/Users/...`)
 - Escaping game root via `../`
 
 **Note:** Currently, GMOS produces **warnings** for these operations but does not automatically rewrite or block them at the engine level. Users should review mods that trigger these warnings carefully.

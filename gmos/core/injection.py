@@ -104,10 +104,10 @@ class SandboxInjector:
                 "Cannot inject sandbox into a binary project (project.binary detected).\nPlease decompile the project first using GDRE Tools."
             )
         if not os.path.exists(self.project_path):
-            logger.error(
-                "Cannot inject sandbox: project.godot not found in %s", self.game_dir
+            raise RuntimeError(
+                f"Failed to inject sandbox. The file 'project.godot' was not found in: {self.game_dir}\n"
+                "Please verify that the path is correct and points to a valid Godot project root."
             )
-            return False
 
         self.project.load()
 

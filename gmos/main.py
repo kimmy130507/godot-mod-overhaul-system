@@ -183,94 +183,62 @@ def main(argv: Optional[List[str]] = None) -> int:
     # GUI mode (no args)
 
     try:
-        from gmos.io.locking import wire_workroot_locking
+        from gmos.io.locking import wire_game_dir_locking
         from gmos.state.config import ensure_config, get_config_path, load_config
         from gmos.ui import App
 
-        # Now, create the main App window. This establishes the Tk root,
-        # which is required before any setup dialogs run.
-        app = App()
-        # --- Proactive Setup Check ---
+        # --- Proactive Setup Check (Run BEFORE App creation) ---
+        # This prevents the App from initializing with invalid defaults (like '.')
+        # and creating unnecessary folders in AppData.
         config_path = get_config_path()
         config = load_config(config_path)
 
-        # Define what "valid" means
-        # Check if the value is present and is a path-like string before calling os.path.isdir
         game_dir_val = config.get("game_dir")
-        is_valid = config and game_dir_val and os.path.isdir(game_dir_val)
+
+        # ENHANCED VALIDATION: Check for actual game files (.pck, .exe, project.godot)
+        def _is_valid_game_dir(path: Any) -> bool:
+            if not path or not isinstance(path, str) or not os.path.isdir(path):
+                return False
+            try:
+                # Stop at first match
+                for f in os.listdir(path):
+                    if f.lower().endswith((".pck", ".exe")) or f == "project.godot":
+                        return True
+            except Exception:
+                pass
+            return False
+
+        is_valid = config and _is_valid_game_dir(game_dir_val)
 
         if not is_valid:
             logger.info("No valid config found. Running SetupWizard.")
+            # ensure_config will create a temporary Tk root if needed.
+            # We force setup because the existing config (if any) is invalid.
+            config = ensure_config(config_path, force_setup=True)
 
-            # Disabling the window keeps it mapped/visible, which prevents the
-            # Toplevel wizard from inheriting a 'hidden' state on Windows.
-            withdraw_fallback = False
-            try:
-                app.attributes("-disabled", 1)  # type: ignore [reportUnknownMemberType]
-            except Exception:
-                # Fallback to withdrawing if disabling fails
-                app.withdraw()
-                withdraw_fallback = True
-
-            config = ensure_config(config_path)
-            # Check for success after the wizard runs
+            # Validate the result
             new_game_dir_val = config.get("game_dir")
-            setup_was_successful = (
-                config and new_game_dir_val and os.path.isdir(new_game_dir_val)
-            )
-
-            if setup_was_successful:
-                # Success path: Destroy the stale app and create a new one.
-                logger.info(
-                    "Setup successful. Destroying stale App instance for clean reload."
+            if not (config and _is_valid_game_dir(new_game_dir_val)):
+                # Failure/Cancel path: Exit immediately.
+                logger.warning(
+                    "Setup cancelled/invalid. Starting in manual configuration mode."
                 )
 
-                # Destroy the stale app instance (including the Tk root)
-                try:
-                    app.destroy()
-                except Exception as e:
-                    logger.debug(
-                        "Failed to destroy stale app instance (ignored): %s", e
-                    )
+        # Now create the main App window with a guaranteed valid config.
+        app = App()
 
-                # Re-create the main App window. This will force it to load the *new* config.
-                app = App()
-
-            else:
-                # Failure/Cancel path: Show warning and restore the original (stale) app.
-                logger.warning("Setup was cancelled. Exiting.")
-                try:
-                    from tkinter import messagebox
-
-                    messagebox.showwarning(
-                        "Setup Failed",
-                        "Configuration setup was cancelled or incomplete. You must configure the game paths manually in the Settings tab to continue.",
-                    )
-                except Exception:
-                    pass
-            # Setup is complete, restore the main window state.
-            if withdraw_fallback:
-                # If we fell back to withdrawing, deiconify it now
-                app.deiconify()
-            else:
-                # Re-enable the window
-                try:
-                    app.attributes("-disabled", 0)  # type: ignore [reportUnknownMemberType]
-                except Exception:
-                    pass
-
-        if wire_workroot_locking is not None:
+        if wire_game_dir_locking is not None:
             try:
-                wire_workroot_locking(app)
+                wire_game_dir_locking(app)
             except Exception as e:
                 # best-effort logging
                 try:
-                    logger.exception("Failed wiring workroot locking: %s", e)
+                    logger.exception("Failed wiring game_dir locking: %s", e)
                 except Exception:
                     import warnings
 
                     warnings.warn(
-                        f"Failed wiring workroot locking: {e}",
+                        f"Failed wiring game_dir locking: {e}",
                         RuntimeWarning,
                         stacklevel=2,
                     )

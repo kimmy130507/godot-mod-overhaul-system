@@ -32,7 +32,7 @@ This is required because Godot resolves assets relative to the game root. Many m
 Each mod must include a `mod.mos` INI-style manifest:
 
 ```ini
-[General]
+[ModInfo]
 Name = Cool Mod
 Version = 1.0.0
 Author = Example

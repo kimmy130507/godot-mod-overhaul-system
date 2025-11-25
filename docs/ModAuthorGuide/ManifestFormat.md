@@ -2,9 +2,9 @@
 
 GMOS mod manifests use a strict INI-style format. This file defines metadata, dependencies, and patch instructions.
 
-## 1. Required Section: `[General]`
+## 1. Required Section: `[ModInfo]`
 
-The core metadata section must be named `[General]`.
+The core metadata section must be named `[ModInfo]`.
 
 ```ini
 [ModInfo]
@@ -40,7 +40,6 @@ Supported sections:
   * `[VariablePatch]`
   * `[FunctionPatch]`
   * `[DataAdd]` (Convenience alias for VariablePatch `mode=create`)
-  * `[DataPatch]` (Convenience alias for VariablePatch `mode=create`)
 
 They may appear in any order.
 

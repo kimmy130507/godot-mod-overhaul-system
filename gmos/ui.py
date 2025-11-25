@@ -19,7 +19,6 @@ import datetime
 import difflib
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess  # nosec B404
@@ -76,6 +75,7 @@ from gmos.io import (
     get_io_executor,
     safe_read_bytes,
 )
+from gmos.io import pck as pck_tools
 from gmos.state import policy, profiles
 from gmos.state.config import DEFAULTS, get_config_path, load_config, write_config
 from gmos.utils import (
@@ -543,22 +543,14 @@ class ModInfoPane(tk.Frame):
         author = ""
         description = ""
         sections: Dict[str, Any] = cfg.get("Sections") or {}
-        for sec_k, lines in sections.items():
-            if sec_k.lower() == "metadata":
-                for line in lines:
-                    try:
-                        k, v = [p.strip() for p in line.split("=", 1)]
-                    except ValueError:
-                        continue
-                    lk = k.lower()
-                    if lk == "name" and v:
-                        name = v
-                    elif lk == "version":
-                        version = v
-                    elif lk == "author":
-                        author = v
-                    elif lk in ("desc", "description"):
-                        description = v
+
+        mod_info = sections.get("ModInfo") or sections.get("modinfo")
+        if isinstance(mod_info, dict):
+            mi = cast(Dict[str, Any], mod_info)
+            name = str(mi.get("Name", name) or "")
+            version = str(mi.get("Version", version) or "")
+            author = str(mi.get("Author", author) or "")
+            description = str(mi.get("Description", description) or "")
 
         cast(tk.Label, self._widgets["name"]).configure(text=name or "")
         cast(tk.Label, self._widgets["version"]).configure(text=version or "")
@@ -1423,7 +1415,8 @@ def rebuild_mod_listbox_from_configs(
 
     for cfg in mod_configs:
         name = name_getter(cfg)
-        label = name
+        summary = _generate_mod_summary(cfg)
+        label = f"{name}  {summary}" if summary else name
         is_invalid = bool(cfg.get("_deps_errors") or cfg.get("Errors"))
         if is_invalid:
             label = f"{label} [INVALID]"
@@ -1457,6 +1450,162 @@ def rebuild_mod_listbox_from_configs(
             )
         else:
             cfg.pop("_deps_tooltip", None)
+
+
+# --- Helper: Mod Action Summary ---
+def _generate_mod_summary(mod_config: ModConfig) -> str:
+    """
+    Analyzes the mod's patch plan to generate a short label like '(V:rep, F:post)'.
+    """
+    path = mod_config.get("Path")
+    if not path:
+        return ""
+
+    try:
+        plan = generate_patch_plan(path, mod_config)
+    except Exception:
+        # If plan generation fails (e.g. malformed paths), return nothing to avoid crashing UI
+        return ""
+
+    tags: Set[str] = set()
+    for _, op, details in plan:
+        if op == "FileReplace":
+            tags.add("File")
+        elif op == "FunctionPatch":
+            # details: (t_res, t_func, s_path, s_func, mode)
+            s_func = str(details[3]) if len(details) > 3 and details[3] else ""
+            mode = str(details[4]) if len(details) > 4 and details[4] else ""
+
+            if mode == "create":
+                tags.add("Fn:new")
+            elif s_func.startswith("prefix_"):
+                tags.add("Fn:pre")
+            elif s_func.startswith("postfix_"):
+                tags.add("Fn:post")
+            else:
+                tags.add("Fn:rep")
+
+        elif op == "VariablePatch":
+            # details: (t_res, t_var, s_path, s_var, mode)
+            mode = str(details[4]) if len(details) > 4 and details[4] else "replace"
+            if mode in ("create", "dataadd"):
+                tags.add("Data")
+            elif mode == "add":
+                tags.add("Var:add")
+            else:
+                tags.add("Var:rep")
+
+    if not tags:
+        return ""
+    return f"({', '.join(sorted(tags))})"
+
+
+# --- Helper: Smart Listbox Tooltip ---
+class ListboxHoverTip:
+    """
+    Shows detailed mod info and CONFLICT reports when hovering over a Listbox item.
+    """
+
+    def __init__(self, listbox: tk.Listbox, app_ref: "App"):
+        self.listbox = listbox
+        self.app = app_ref
+        self.tipwindow: Optional[tk.Toplevel] = None
+        self.last_index: Optional[int] = None
+        self.listbox.bind("<Motion>", self._on_motion)
+        self.listbox.bind("<Leave>", self._hide_tip)
+
+    def _on_motion(self, event: "tk.Event[Any]") -> None:
+        # Find which item is under the mouse
+        index = int(cast(Any, self.listbox).nearest(event.y))
+
+        # Check if mouse is actually over the item (nearest returns closest even if far away)
+        bbox = self.listbox.bbox(index)
+        if not bbox:
+            self._hide_tip()
+            return
+
+        # bbox is (x, y, width, height) relative to listbox content
+        # We need to check if event.y is roughly within that vertical band
+        if not (bbox[1] <= event.y <= bbox[1] + bbox[3]):
+            self._hide_tip()
+            return
+
+        if index == self.last_index:
+            return  # Same item, don't flicker
+
+        self.last_index = index
+        self._schedule_tip(index, event.x_root, event.y_root)
+
+    def _schedule_tip(self, index: int, x: int, y: int) -> None:
+        self._hide_tip()
+        # 300ms delay to prevent spamming while scrolling
+        self.after_id = self.listbox.after(300, lambda: self._show_tip(index, x, y))
+
+    def _hide_tip(self, _event: Any = None) -> None:
+        if hasattr(self, "after_id"):
+            self.listbox.after_cancel(self.after_id)
+        self.last_index = None
+        if self.tipwindow:
+            self.tipwindow.destroy()
+            self.tipwindow = None
+
+    def _show_tip(self, index: int, x: int, y: int) -> None:
+        if index < 0 or index >= len(self.app.mod_configs):
+            return
+
+        cfg = self.app.mod_configs[index]
+        mod_name = cfg.get("Name") or "Unknown"
+
+        # Build the Text
+        lines: List[str] = []
+
+        # 1. Description
+        sections = cfg.get("Sections", {})
+        desc = ""
+        if "ModInfo" in sections:
+            # Handle both Dict and List formats for safety
+            mi = sections["ModInfo"]
+            if isinstance(mi, dict):
+                desc = mi.get("Description", "")
+            else:
+                for line in mi:
+                    if line and line.lower().startswith("description"):
+                        desc = line.split("=", 1)[1].strip()
+        if desc:
+            lines.append(f"Description: {desc}")
+
+        # 2. CONFLICT REPORT (The "Red Glow" Detail)
+        # We look up conflicts for this specific mod in the App's cache
+        conflicts = self.app.get_conflicts_for_mod(mod_name)
+        if conflicts:
+            lines.append("\n⚠️ CONFLICTS DETECTED:")
+            for target, others in conflicts.items():
+                lines.append(f" • {target}")
+                lines.append(f"   conflicts with: {', '.join(others)}")
+
+        if not lines:
+            return  # Nothing to show
+
+        # Create Window
+        self.tipwindow = tw = tk.Toplevel(self.listbox)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x+20}+{y+10}")
+
+        label = tk.Label(
+            tw,
+            text="\n".join(lines),
+            justify=tk.LEFT,
+            background="#ffffe0",
+            relief=tk.SOLID,
+            borderwidth=1,
+            font=("tahoma", 9, "normal"),
+        )
+        # Colorize text if conflict
+        if conflicts:
+            label.configure(fg="#b00000")  # Dark Red text
+            label.configure(background="#ffe0e0")  # Light Red bg
+
+        label.pack(ipadx=1)
 
 
 # ---------------------- Main Application GUI ----------------------
@@ -1513,22 +1662,20 @@ class App(tk.Tk):
         self.load_mods()  # Initial load
 
     def _acquire_singleton_lock(self) -> None:
-        """Ensures only one instance is running using utils.LOCK_PATH."""
-        utils.ensure_log_dir_exists()
+        """Ensures only one instance is running using the centralized LockManager."""
         try:
-            # Keep the file handle open in self._lock_file to maintain the lock
-            self._lock_file = open(utils.LOCK_PATH, "a")
-            if sys.platform == "win32":
-                import msvcrt
+            from gmos.io.locking import acquire_app_lock
 
-                msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.lockf(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, OSError):
-            messagebox.showerror("GMOS Running", "Another instance is already running.")
-            sys.exit(0)
+            # Use the new LockManager. It is idempotent, so if main.py already
+            # acquired the lock, this just confirms it without conflict.
+            if not acquire_app_lock(retry_once=False):
+                messagebox.showerror(
+                    "GMOS Running", "Another instance is already running."
+                )
+                sys.exit(0)
+        except Exception as e:
+            logger.exception("Failed to acquire singleton lock via manager: %s", e)
+            sys.exit(1)
 
     def load_config(self) -> None:
         """Load configuration into self.configure (backwards-compatible)."""
@@ -1683,7 +1830,7 @@ class App(tk.Tk):
         ttk.Button(
             mod_list_controls,
             text="Revert Game Files",
-            command=self.rollback_working_dir,
+            command=self.rollback_game_files,
         ).pack(side="right", padx=5)
         ttk.Button(
             mod_list_controls,
@@ -1702,6 +1849,12 @@ class App(tk.Tk):
         ).pack(side="right", padx=5)
         self.mod_list_box = tk.Listbox(mod_list_frame, height=10, exportselection=False)
         self.mod_list_box.pack(fill="both", expand=True)
+        self.listbox_tip = ListboxHoverTip(self.mod_list_box, self)
+
+        # Cache for conflict lookups {mod_name: {target: [other_mods]}}
+        self.conflict_cache: Dict[str, Dict[str, List[str]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
 
         # Drag and drop implementation for reordering
         self.mod_list_box.bind("<Button-1>", self.on_mod_list_click)
@@ -1915,6 +2068,64 @@ class App(tk.Tk):
         self.diff_txt.pack(fill="both", expand=True)
 
     # --- GUI Handlers ---
+    def get_conflicts_for_mod(self, mod_name: str) -> Dict[str, List[str]]:
+        """Returns dict of {target: [other_mod_names]} for the given mod."""
+        return self.conflict_cache.get(mod_name, {})
+
+    def update_conflict_status(self) -> None:
+        """Checks for conflicts, updates GUI label, and REBUILDS CONFLICT CACHE."""
+        raw_conflicts = analyze_mods_for_conflicts(
+            cast(List[ModConfig], self.mod_configs)
+        )
+
+        # 1. Rebuild Cache for Tooltips
+        self.conflict_cache.clear()
+        if raw_conflicts:
+            for target_key, instructions in raw_conflicts.items():
+                # instructions is list of (mod_name, op, details)
+                involved_mods = [instr[0] for instr in instructions]
+
+                # For each mod involved, record the conflict
+                for mod in involved_mods:
+                    others = [m for m in involved_mods if m != mod]
+                    if others:
+                        # target_key format is Type::res://path::var
+                        readable_target = (
+                            target_key.split("::", 1)[1]
+                            if "::" in target_key
+                            else target_key
+                        )
+                        self.conflict_cache[mod][readable_target] = others
+
+        # 2. Update UI Label (Existing Logic)
+        if raw_conflicts:
+            count = len(raw_conflicts)
+            self.conflict_label.configure(
+                text=f"{count} Conflict{'s' if count > 1 else ''} Detected! (Click to Resolve)",
+                fg="red",
+            )
+            self.conflict_label.bind("<Button-1>", lambda e: self.open_resolve_dialog())
+        else:
+            self.conflict_label.configure(text="No Conflicts Detected", fg="green")
+            self.conflict_label.unbind("<Button-1>")
+
+        # 3. Refresh Listbox colors (Red text for conflicting mods)
+        self._refresh_listbox_colors()
+
+    def _refresh_listbox_colors(self) -> None:
+        """Updates listbox item colors based on conflict status."""
+        for i, cfg in enumerate(self.mod_configs):
+            name = cfg.get("Name")
+            if name in self.conflict_cache:
+                # Conflict -> RED
+                self.mod_list_box.itemconfig(i, fg="red")  # type: ignore[reportUnknownMemberType]
+            elif not cfg.get("Enabled", True):
+                # Disabled -> Gray
+                self.mod_list_box.itemconfig(i, fg="gray")  # type: ignore[reportUnknownMemberType]
+            else:
+                # Normal -> Default (Black/Theme)
+                # Note: ttkbootstrap might override this, verify theme compat
+                self.mod_list_box.itemconfig(i, fg="")  # type: ignore[reportUnknownMemberType]
 
     def on_mod_list_click(self, event: "tk.Event[Any]") -> None:
         self.drag_index = int(cast(str, self.mod_list_box.nearest(event.y)))  # type: ignore[no-untyped-call, reportUnknownMemberType]
@@ -2173,7 +2384,7 @@ class App(tk.Tk):
         """
         Updates the UI elements after a successful rollback operation.
         Calls rebuild_mod_listbox_from_configs to refresh the mod list
-        to reflect the (now clean) state of the work directory.
+        to reflect the (now clean) state of the game directory.
         :param message: The success message from the rollback operation.
         """
         try:
@@ -2183,7 +2394,6 @@ class App(tk.Tk):
             )
 
             # Update main status and application title
-            # Use conflict_label as status_label is not defined
             self.conflict_label.configure(
                 text="Rollback successful. Ready to patch.", fg="green"
             )
@@ -2199,163 +2409,65 @@ class App(tk.Tk):
                 "UI Update Error", "Failed to refresh UI after rollback."
             )
 
-    def rollback_working_dir(self) -> None:
-        """Preview and selectively restore *.bak files in work_root or remove work_root.
-        Debug-hardened: logs key steps, catches errors creating the preview window,
-        forces window to top and reports problems via messagebox and log.
-        """
+    def rollback_game_files(self) -> None:
+        """Preview and selectively restore *.bak files in game_dir."""
         try:
             self.append_log("Rollback: invoked")
         except Exception as e:
-            logger.debug(
-                "Failed to append initial 'Rollback: invoked' log message: %s",
-                e,
-                exc_info=True,
-            )
-        work_root = self.vars.get("game_dir", tk.StringVar()).get()
-        if not work_root or not os.path.isdir(work_root):
-            messagebox.showinfo("Rollback", f"No working directory found: {work_root}")
-            try:
-                self.append_log(f"Rollback: no work_root or missing dir: {work_root}")
-            except Exception as e:
-                logger.debug(
-                    "Failed to append 'Rollback: no work_root' log message:f %s",
-                    e,
-                    exc_info=True,
-                )
+            logger.debug("Rollback init log failed: %s", e, exc_info=True)
+
+        game_dir = self.vars.get("game_dir", tk.StringVar()).get()
+        if not game_dir or not os.path.isdir(game_dir):
+            messagebox.showinfo("Rollback", f"No game directory found: {game_dir}")
+            self.append_log(f"Rollback: missing dir: {game_dir}")
             return
-
-        # Helper function for consistent working directory removal logic
-        def _remove_work_root(
-            self: "App", preview_window: Optional[tk.Toplevel] = None
-        ) -> None:
-            # Check if the work_root is the root directory or too close to it for safety
-            if (
-                work_root == os.path.expanduser("~")
-                or work_root == os.getcwd()
-                or len(Path(work_root).parts) < 3
-            ):
-                # legacy code
-                messagebox.showerror(
-                    "Security Check Failed",
-                    f"Refusing to remove working directory because it is too close to a critical system path: {work_root}",
-                )
-                self.append_log(
-                    "Rollback: SECURITY REFUSED to remove path close to root."
-                )
-                return
-
-            confirm = messagebox.askyesno(
-                "Confirm Remove",
-                f"Are you sure you want to permanently remove the entire working directory:\n\n{work_root}?",
-            )
-            if confirm:
-                try:
-                    # Explicitly destroy the preview window if it exists before removal
-                    if preview_window and preview_window.winfo_exists():
-                        preview_window.destroy()
-
-                    shutil.rmtree(work_root)
-                    messagebox.showinfo("Rollback", "Working directory removed.")
-                    self.append_log(f"Rollback: removed working directory {work_root}")
-                    # In a real app, you would clean up UI/state here
-                    if hasattr(self, "update_ui_after_rollback"):
-                        self.update_ui_after_rollback("Working directory removed.")
-                except Exception as e:
-                    messagebox.showerror("Rollback Error", f"Remove failed: {e}")
-                    self.append_log(f"Rollback error (remove): {e}")
 
         # Gather bak files (relative)
         bak_list: List[str] = []
         try:
-            for root, _, files in os.walk(work_root):
+            for root, _, files in os.walk(game_dir):
                 for fn in files:
                     if fn.endswith(".bak"):
                         full = os.path.join(root, fn)
-                        rel = os.path.relpath(full, work_root)
+                        rel = os.path.relpath(full, game_dir)
                         bak_list.append(rel)
         except Exception as e:
-            messagebox.showerror("Rollback Error", f"Failed scanning work_root: {e}")
-            try:
-                self.append_log(f"Rollback error scanning work_root: {e}")
-            except Exception as e:
-                logger.debug(
-                    "Failed to append log after work_root scan failure: %s",
-                    e,
-                    exc_info=True,
-                )
+            messagebox.showerror("Rollback Error", f"Failed scanning game_dir: {e}")
+            self.append_log(f"Rollback error: {e}")
             return
 
-        try:
-            self.append_log(f"Rollback: found {len(bak_list)} .bak files")
-        except Exception as e:
-            logger.debug(
-                "Failed to append log message for bak file count: %s", e, exc_info=True
-            )
+        self.append_log(f"Rollback: found {len(bak_list)} .bak files")
 
-        # If no .bak files, prompt for directory removal and return
+        # If no .bak files, just inform user
         if not bak_list:
-            resp = messagebox.askyesno(
-                "Rollback",
-                f"No .bak files found in {work_root}. Remove entire working directory?",
+            messagebox.showinfo(
+                "Rollback", f"No backup (.bak) files found in {game_dir}."
             )
-            if resp:
-                _remove_work_root(self)
             return
 
-        # Create preview window robustly
-        preview: Optional[tk.Toplevel] = None
+        # Create preview window
         try:
-            parent = self
-            preview = tk.Toplevel(parent)
+            preview = tk.Toplevel(self)
+            utils.load_and_apply_app_icon_to_toplevel(preview)
             preview.title("Rollback — Preview .bak files")
             preview.geometry("700x400")
-            preview.transient(parent)
+            preview.transient(self)
             preview.lift()  # type: ignore [reportUnknownMemberType]
             preview.deiconify()
-            try:
-                # Force to top briefly, then release
-                preview.attributes("-topmost", True)  # type: ignore [reportUnknownMemberType]
-                preview.after(
-                    200,
-                    lambda: preview.attributes("-topmost", False),  # type: ignore [reportUnknownMemberType]
-                )
-            except Exception as e:
-                logger.debug(
-                    "Ignored error setting rollback preview window topmost: %s",
-                    e,
-                    exc_info=True,
-                )
         except Exception as e:
-            # If Toplevel creation fails we must show the error and log it
             messagebox.showerror("Rollback Error", f"Cannot create preview window: {e}")
-            try:
-                self.append_log(f"Rollback error creating preview window: {e}")
-            except Exception as e:
-                logger.debug(
-                    "Failed to append log after preview window creation failure: %s",
-                    e,
-                    exc_info=True,
-                )
             return
 
-        lbl = tk.Label(
-            preview,
-            text="Select .bak files to restore (checked) or clean all backups (Dangerous).",
+        tk.Label(preview, text="Select .bak files to restore (checked).").pack(
+            anchor="w", padx=8, pady=(8, 0)
         )
-        lbl.pack(anchor="w", padx=8, pady=(8, 0))
 
-        # scrolling checkbox list setup
+        # scrolling checkbox list
         frm = tk.Frame(preview)
         frm.pack(fill="both", expand=True, padx=8, pady=8)
         canvas = tk.Canvas(frm)
-        sb = tk.Scrollbar(
-            frm,
-            orient="vertical",
-            command=canvas.yview,  # type: ignore[reportUnknownArgumentType]
-        )
+        sb = tk.Scrollbar(frm, orient="vertical", command=canvas.yview)  # type: ignore[reportUnknownArgumentType]
         inner = tk.Frame(canvas)
-        # Bind inner frame size to canvas scroll region
         inner.bind(
             "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
@@ -2367,106 +2479,69 @@ class App(tk.Tk):
         vars_map: Dict[str, tk.BooleanVar] = {}
         for rel in sorted(bak_list):
             v = tk.BooleanVar(value=True)
-            cb = tk.Checkbutton(inner, text=rel, variable=v, anchor="w", justify="left")
-            cb.pack(fill="x", anchor="w")
+            tk.Checkbutton(
+                inner, text=rel, variable=v, anchor="w", justify="left"
+            ).pack(fill="x", anchor="w")
             vars_map[rel] = v
 
         btn_frame = tk.Frame(preview)
         btn_frame.pack(fill="x", padx=8, pady=8)
 
         def _restore_selected() -> None:
-            selected: List[str] = [r for r, var in vars_map.items() if var.get()]
+            selected = [r for r, var in vars_map.items() if var.get()]
             if not selected:
-                messagebox.showinfo("Rollback", "No files selected to restore.")
+                messagebox.showinfo("Rollback", "No files selected.")
                 return
-            confirm = messagebox.askyesno(
-                "Confirm Restore", f"Restore {len(selected)} files from .bak?"
-            )
-            if not confirm:
+            if not messagebox.askyesno(
+                "Confirm Restore", f"Restore {len(selected)} files?"
+            ):
                 return
+
             restored = 0
             errors: List[str] = []
             for rel in selected:
-                bak = os.path.join(work_root, rel)
-                orig = os.path.join(work_root, rel[:-4])
+                bak = os.path.join(game_dir, rel)
+                orig = os.path.join(game_dir, rel[:-4])
                 try:
-                    # safety: ensure target within work_root
-                    # This check is vital against path traversal exploits
-                    if not os.path.commonpath([work_root, orig]).startswith(
-                        os.path.normpath(work_root)
+                    if not os.path.commonpath([game_dir, orig]).startswith(
+                        os.path.normpath(game_dir)
                     ):
-                        raise RuntimeError("path outside work_root detected")
-
+                        raise RuntimeError("path traversal detected")
                     atomic_write_copy(bak, orig)
                     restored += 1
-                    self.append_log(
-                        f"Rollback: restored {rel} -> {os.path.relpath(orig, work_root)}"
-                    )
+                    self.append_log(f"Restored {rel}")
                 except Exception as e:
                     errors.append(f"{rel}: {e}")
-                    self.append_log(f"Rollback error restoring {rel}: {e}")
+                    self.append_log(f"Error restoring {rel}: {e}")
 
-            # Show summary message and destroy preview
-            message = f"Restored {restored} files."
+            msg = f"Restored {restored} files."
             if errors:
-                message += f" {len(errors)} errors occurred. See log."
-            messagebox.showinfo("Rollback", message)
-            if preview:
-                preview.destroy()
+                msg += f" {len(errors)} errors (see log)."
+            messagebox.showinfo("Rollback", msg)
+            preview.destroy()
             if hasattr(self, "update_ui_after_rollback"):
-                self.update_ui_after_rollback(message)
+                self.update_ui_after_rollback(msg)
 
-        # --- Button creation and packing ---
-        btn_restore = tk.Button(
+        tk.Button(
             btn_frame,
             text=f"Restore Selected ({len(bak_list)})",
             command=_restore_selected,
             bg="#4CAF50",
-            fg="white",  # Green for restoration
-            relief="raised",
+            fg="white",
+        ).pack(side="left", padx=4, fill="x", expand=True)
+        tk.Button(btn_frame, text="Cancel", command=preview.destroy).pack(
+            side="right", padx=4
         )
-        btn_restore.pack(side="left", padx=(0, 4), expand=True, fill="x")
 
-        btn_remove = tk.Button(
-            btn_frame,
-            text="Clean All Backups (Dangerous)",
-            command=lambda: _remove_work_root(
-                self, preview
-            ),  # Pass preview to helper for destruction
-            bg="#F44336",
-            fg="white",  # Red for destructive action
-            relief="raised",
-        )
-        btn_remove.pack(side="right", padx=(4, 0), expand=True, fill="x")
-
-        # Make the window modal and wait for it to close
-        if preview:
-            preview.grab_set()
-            parent.wait_window(preview)
-
-        btn_cancel = tk.Button(
-            btn_frame,
-            text="Cancel",
-            command=preview.destroy if preview else lambda: None,
-        )
-        btn_cancel.pack(side="right", padx=6)
-
-        # final trace entry
-        try:
-            self.append_log("Rollback: preview window shown")
-        except Exception as e:
-            logger.debug(
-                "Failed to append log message after rollback preview window creation: %s",
-                e,
-                exc_info=True,
-            )
+        preview.grab_set()
+        self.wait_window(preview)
 
     def create_support_bundle(self) -> None:
-        """Create a support zip containing logs and runtime_manifest from work_root (if present)."""
+        """Create a support zip containing logs and runtime_manifest from game_dir (if present)."""
         try:
-            work_root = safe_norm(self.vars["game_dir"].get())
+            game_dir = safe_norm(self.vars["game_dir"].get())
         except Exception:
-            work_root = None
+            game_dir = None
 
         # default filename
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -2495,24 +2570,24 @@ class App(tk.Tk):
                     if fn.startswith("dryrun_bundle_") and fn.endswith(".zip"):
                         zf.write(os.path.join(LOG_DIR, fn), os.path.join("logs", fn))
 
-                # include runtime_manifest from work_root if exists
-                if work_root:
-                    candidate = os.path.join(work_root, "runtime_manifest.json")
+                # include runtime_manifest from game_dir if exists
+                if game_dir:
+                    candidate = os.path.join(game_dir, "runtime_manifest.json")
                     if os.path.exists(candidate):
                         zf.write(
                             candidate,
-                            os.path.join("work_root", "runtime_manifest.json"),
+                            os.path.join("game_dir", "runtime_manifest.json"),
                         )
 
-                # include patch.log if present in work_root or ROOT_DIR
+                # include patch.log if present in game_dir or ROOT_DIR
                 for candidate in [
-                    os.path.join(work_root or "", "patch.log"),
+                    os.path.join(game_dir or "", "patch.log"),
                     os.path.join(ROOT_DIR, "patch.log"),
                 ]:
                     if candidate and os.path.exists(candidate):
                         zf.write(
                             candidate,
-                            os.path.join("work_root", os.path.basename(candidate)),
+                            os.path.join("game_dir", os.path.basename(candidate)),
                         )
 
             messagebox.showinfo("Support Bundle", f"Support bundle saved: {out}")
@@ -2635,20 +2710,6 @@ class App(tk.Tk):
         self.append_log(
             f"Generated {len(self.instructions)} patch instructions. Skipped mods: {', '.join(skipped) if skipped else 'none'}."
         )
-
-    def update_conflict_status(self) -> None:
-        """Checks for conflicts and updates the GUI label."""
-        conflicts = analyze_mods_for_conflicts(cast(List[ModConfig], self.mod_configs))
-        if conflicts:
-            count = len(conflicts)
-            self.conflict_label.configure(
-                text=f"{count} Conflict{'s' if count > 1 else ''} Detected! (Click to Resolve)",
-                fg="red",
-            )
-            self.conflict_label.bind("<Button-1>", lambda e: self.open_resolve_dialog())
-        else:
-            self.conflict_label.configure(text="No Conflicts Detected", fg="green")
-            self.conflict_label.unbind("<Button-1>")
 
     def open_resolve_dialog(self) -> None:
         """Opens the conflict resolution dialog."""
@@ -3042,6 +3103,51 @@ class App(tk.Tk):
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_work_root = os.path.join(temp_dir, "sim_work")
                 Path(temp_work_root).mkdir(parents=True, exist_ok=True)
+
+                # Pre-seed the temp directory with source files so patching can actually happen.
+                # We also create a dummy project.godot to pass the sanity check.
+                Path(os.path.join(temp_work_root, "project.godot")).touch()
+
+                for rel_path in touched_by.keys():
+                    # Determine best source: Backup > Loose > PCK
+                    src_file = os.path.join(game_dir, rel_path)
+                    bak_file = src_file + ".bak"
+                    dest_file = os.path.join(temp_work_root, rel_path)
+
+                    os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+
+                    try:
+                        if os.path.exists(bak_file):
+                            # Case A: Restore from Backup (Simulate Clean Patch)
+                            shutil.copy2(bak_file, dest_file)
+                        elif os.path.exists(src_file):
+                            # Case B: Copy Loose File
+                            shutil.copy2(src_file, dest_file)
+                        else:
+                            # Case C: Try Extract from PCK (Vanilla)
+                            # We use the game_dir to find PCKs, but write to temp_work_root
+                            res_path = f"res://{rel_path.replace(os.sep, '/')}"
+                            # Scan game dir for PCKs
+                            pck_found = False
+                            with os.scandir(game_dir) as it:
+                                for entry in it:
+                                    if entry.name.endswith(".pck"):
+                                        content = pck_tools.get_file_content(
+                                            entry.path, res_path
+                                        )
+                                        if content:
+                                            with open(dest_file, "wb") as f:
+                                                f.write(content)
+                                            pck_found = True
+                                            break
+                            if not pck_found:
+                                pass  # Might be a 'create' operation, so missing source is fine
+                    except Exception as e:
+                        logger.debug(
+                            f"Failed to pre-seed {rel_path} for simulation: {e}"
+                        )
+
+                # Run patcher on the pre-seeded temp directory
                 sim_log = run_patcher(temp_work_root, self.instructions)
 
                 # 3. Determine which files were actually modified (patched_rel_paths)
@@ -3061,25 +3167,6 @@ class App(tk.Tk):
                                 )
 
                             self.after(0, _log_manifest)
-
-                    if not patched_rel_paths:
-                        # Fallback: regex-parse sim_log (legacy behavior)
-                        for line in sim_log:
-                            m = re.search(r"Copied\s+([^\s]+)\s+to", line)
-                            if m:
-                                patched_rel_paths.append(m.group(1))
-                                continue
-                            m2 = re.search(r"Used existing\s+([^\s]+)\s+in", line)
-                            if m2:
-                                patched_rel_paths.append(m2.group(1))
-
-                        if patched_rel_paths:
-                            self.after(
-                                0,
-                                lambda: self.append_log(
-                                    f"Fallback: parsed sim_log for {len(patched_rel_paths)} files."
-                                ),
-                            )
 
                 except Exception as sim_exc:
                     logger.exception("Failed to read manifest or parse sim_log.")
@@ -3105,14 +3192,19 @@ class App(tk.Tk):
                 # 4. Generate diffs
                 combined_parts: List[str] = []
                 for rel in dedup_paths:
-                    orig_path = os.path.join(
-                        game_dir, rel
-                    )  # For diffing, we assume game_dir is vanilla-ish?
-                    # Issue: In the single folder model, game_dir might be dirty.
-                    # Simulation runs in empty temp dir, so reading orig_path from game_dir
-                    # might compare against already-patched files if revert failed.
-                    # However, since this is simulation, we can't revert the real game dir.
-                    # We have to trust that the user understands 'Diff' shows change relative to CURRENT disk state.
+                    # Compare the Result (Temp) against the Source (Game Dir / Backup)
+                    # We prioritize the .bak file in the Game Dir as the "Original" reference
+                    # to ensure the diff shows changes vs Vanilla, not changes vs Dirty State.
+                    real_path = os.path.join(game_dir, rel)
+                    bak_path = real_path + ".bak"
+
+                    if os.path.exists(bak_path):
+                        orig_path = bak_path
+                        label_orig = f"original/{rel} (backup)"
+                    else:
+                        orig_path = real_path
+                        label_orig = f"original/{rel} (current)"
+
                     patched_path = os.path.join(temp_work_root, rel)
 
                     # Create file header with mods info
@@ -3124,19 +3216,21 @@ class App(tk.Tk):
                     combined_parts.append(header)
 
                     # Read files safely (ignoring encoding errors for diff)
+                    orig_lines: List[str] = []
                     try:
                         with open(
                             orig_path, "r", encoding="utf-8", errors="ignore"
-                        ) as f:
-                            orig_lines = f.readlines()
+                        ) as f_orig:
+                            orig_lines = f_orig.readlines()
                     except Exception:
                         orig_lines = []
 
+                    patched_lines: List[str] = []
                     try:
                         with open(
                             patched_path, "r", encoding="utf-8", errors="ignore"
-                        ) as f:
-                            patched_lines = f.readlines()
+                        ) as f_patch:
+                            patched_lines = f_patch.readlines()
                     except Exception:
                         patched_lines = []
 
@@ -3144,8 +3238,8 @@ class App(tk.Tk):
                     diff_iter = difflib.unified_diff(
                         orig_lines,
                         patched_lines,
-                        fromfile=f"original/{rel}",
-                        tofile=f"patched/{rel}",
+                        fromfile=label_orig,
+                        tofile=f"simulated/{rel}",
                         lineterm="",
                     )
                     diff_text = "\n".join(diff_iter)
@@ -3260,12 +3354,12 @@ class App(tk.Tk):
                 )
 
     def view_runtime_manifest(self) -> None:
-        """Open runtime_manifest.json from work_root in system viewer or show an error."""
-        work_root = safe_norm(self.vars["game_dir"].get())
-        manifest_path = os.path.join(work_root, "runtime_manifest.json")
+        """Open runtime_manifest.json from game_dir in system viewer or show an error."""
+        game_dir = safe_norm(self.vars["game_dir"].get())
+        manifest_path = os.path.join(game_dir, "runtime_manifest.json")
         if not os.path.exists(manifest_path):
             messagebox.showinfo(
-                "Runtime Manifest", f"No runtime_manifest.json found in {work_root}"
+                "Runtime Manifest", f"No runtime_manifest.json found in {game_dir}"
             )
             return
         try:

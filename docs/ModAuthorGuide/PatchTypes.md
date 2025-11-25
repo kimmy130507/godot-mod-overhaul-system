@@ -39,8 +39,8 @@ res://player.gd::mana = patches/stats.gd::mana; mode=create
 | `add`     | Append lines to an existing variable (useful for arrays/dicts). |
 | `create`  | Append new variable to the file. |
 
-**Aliases:**
-The sections `[DataAdd]` and `[DataPatch]` are aliases for `VariablePatch` with `mode=create`.
+**Alias:**
+The section `[DataAdd]` is an alias for `VariablePatch` with `mode=create`.
 
 # 3. FunctionPatch
 
@@ -60,8 +60,16 @@ GMOS determines behavior by **source function name**:
 | `postfix_`         | Run after original  | `postfix_take_damage` |
 | None               | Full replace        | `take_damage`         |
 
-**⚠️ Critical Warning for Replace Mode:**
-When performing a full replace (no prefix), you **MUST NOT** attempt to rename the function. The source function in your patch file must define the function with the **exact same name** as the target function. Renaming functions during a replace operation is unsupported.
+**Creating New Functions:**
+
+You can add entirely new functions to a script by setting the mode to `create` in the manifest line metadata.
+
+```ini
+res://combat.gd::new_special_move = patches/combat_mod.gd::new_special_move ; mode=create
+```
+
+**Renaming in Replace Mode:**
+When performing a full replace, you can name the function in your patch file whatever you like (e.g., `my_cool_hook`). GMOS will automatically rewrite the signature to match the target function's name (e.g., `_process`) during the patch process.
 
 # Patch Priority
 

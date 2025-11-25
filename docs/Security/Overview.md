@@ -11,7 +11,10 @@ This document summarizes GMOS’ defense layers and how they interact.
 # 1. Security Design Principles
 
 ## Least Privilege
-Mods are discouraged from accessing files outside the game directory. The Static Analyzer warns users if a mod attempts to read/write absolute system paths.
+Mods are discouraged from performing high-risk operations. The Static Analyzer warns users if a mod attempts to:
+- Read/write absolute system paths.
+- Open network sockets.
+- Load binary extensions.
 
 ## Deterministic Behavior
 Every security decision produces the same result across runs, preventing inconsistent behavior that could be exploited.
@@ -37,7 +40,10 @@ All potentially destructive actions are guarded by:
    Rewrites unsafe `OS.execute` calls to `GMOS_Sandbox` secure wrappers.
 
 4. **Static Analysis (Passive)**
-   Scans for and warns about filesystem access, network usage, and binary loading.
+   Scans for and warns about:
+   * **Filesystem Access:** `FileAccess`, `DirAccess` (absolute paths).
+   * **Network Usage:** `HTTPClient`, `HTTPRequest`.
+   * **Binary Loading:** `load()` calls targeting `.dll`, `.so`, or `.dylib`.
 
 5. **Dependency Validation**
    Detects malicious or unexpected dependency chains.

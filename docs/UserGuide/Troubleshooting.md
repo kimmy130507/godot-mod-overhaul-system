@@ -5,7 +5,7 @@ Common problems and how to fix them.
 ## Logs
 
 GMOS writes logs to platform-appropriate locations.
-* **Windows**: `%LOCALAPPDATA%\gmos\logs\gmos.log`
+* **Windows**: `%APPDATA%\gmos\logs\gmos.log` (Roaming Profile)
 * **Linux**: `~/.local/share/gmos/logs/gmos.log`
 * **macOS**: `~/Library/Logs/gmos/gmos.log`
 

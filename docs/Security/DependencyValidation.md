@@ -11,7 +11,7 @@ All dependencies listed in the `[Dependencies]` section of `mod.mos` must exist 
 
 ### Cycle Detection
 The topological sorter detects circular dependencies (e.g., A to B to A).
-- **Action:** The cycle is detected, logged as an error, and the patch process is aborted to prevent undefined behavior.
+- **Action:** The cycle is detected and logged. GMOS breaks the cycle by forcing the mod with the highest priority (lowest list index) to load first, allowing the process to continue.
 
 ### Name Collisions
 GMOS enforces unique mod names.

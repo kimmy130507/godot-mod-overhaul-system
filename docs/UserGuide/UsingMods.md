@@ -65,22 +65,12 @@ GMOS scans script code for specific remote code execution risks (specifically `O
 
 No leftover artifacts remain in the original game files; backups are cleaned per retention policy.
 
-## CLI examples
+## CLI Mode
 
-- Refresh mods:
-```sh
-gmos --refresh
-```
-
-  - Apply patch:
+GMOS currently supports a **Headless Dry-Run** mode intended for automated testing and CI pipelines.
 
 ```sh
-gmos --apply
+gmos --game-dir "C:/Games/Brotato" --instructions patch_plan.json
 ```
 
-  - Enable a mod:
-
-
-```sh
-gmos --enable "ExampleMod"
-```
+*Note: High-level management commands (e.g., --enable, --refresh) are planned for a future release.*
