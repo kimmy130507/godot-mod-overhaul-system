@@ -185,12 +185,8 @@ def test_save_unified_patch(tk_root: tk.Tk, mock_app: MagicMock) -> None:
             "code": "var speed = 9999",
         }
 
-        # Mocking directory creation and permissions to avoid FS errors
-        with (
-            patch("os.makedirs"),
-            patch("pathlib.Path.mkdir"),
-            patch("gmos.io.base.check_write_permission", return_value=(True, None)),
-        ):
+        # Mock the high-level write function to avoid all physical FS operations
+        with patch("os.makedirs"), patch("gmos.ui.merger.atomic_replace"):
             studio._save_all()  # type: ignore[reportPrivateUsage]
 
         # Verify file writes
