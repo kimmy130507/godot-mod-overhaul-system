@@ -185,8 +185,8 @@ def test_save_unified_patch(tk_root: tk.Tk, mock_app: MagicMock) -> None:
             "code": "var speed = 9999",
         }
 
-        # Mocking os.makedirs to avoid FS errors
-        with patch("os.makedirs"):
+        # Mocking directory creation to avoid FS errors
+        with patch("os.makedirs"), patch("pathlib.Path.mkdir"):
             studio._save_all()  # type: ignore[reportPrivateUsage]
 
         # Verify file writes
