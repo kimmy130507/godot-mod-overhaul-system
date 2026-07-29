@@ -6,8 +6,15 @@ on:
       - main
       - dev
       - 'release/*'
+      - 'feature/*'
+      - 'fix/*'
+      - 'security/*'
+  pull_request:
+    branches:
+      - main
+      - dev
   workflow_dispatch:
-
+    
 jobs:
   e2e-headless:
     name: Headless E2E (${{ matrix.os }})
@@ -77,6 +84,7 @@ jobs:
           else
             pip install pytest
           fi
+          pip install -e .
       - name: Run headless E2E tests
         run: |
           if [[ "${{ runner.os }}" == "Linux" ]]; then
