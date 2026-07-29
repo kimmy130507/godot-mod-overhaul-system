@@ -17,7 +17,7 @@
 # along with GMOS.  If not, see <https://www.gnu.org/licenses/>.
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 from gmos import utils
 from gmos.state.config import save_global_config
@@ -76,11 +76,11 @@ class SettingsDialog(tk.Toplevel):
         btn_frame.pack(fill="x", side="bottom")
 
         ttk.Button(btn_frame, text="Close", command=self.destroy).pack(side="right")
-        cast(Any, ttk.Button)(
+        ttk.Button(
             btn_frame,
             text="Save Global Settings",
             command=self._save_global,
-            bootstyle="primary",
+            style="primary.TButton",
         ).pack(side="right", padx=5)
 
     def _build_general_tab(self, parent: ttk.Frame) -> None:

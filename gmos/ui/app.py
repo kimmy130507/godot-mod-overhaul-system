@@ -1671,8 +1671,11 @@ class App(BaseTk):
                 if os.name == "nt":
                     try:
                         output = subprocess.check_output(
-                            f'tasklist /FI "IMAGENAME eq {os.path.basename(exe_name)}"',
-                            shell=True,
+                            [
+                                "tasklist",
+                                "/FI",
+                                f"IMAGENAME eq {os.path.basename(exe_name)}",
+                            ],
                             text=True,
                         )
                         if exe_basename in output.lower():

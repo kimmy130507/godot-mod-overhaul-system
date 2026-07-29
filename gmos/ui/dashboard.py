@@ -373,35 +373,51 @@ class DashboardView(ttk.Frame):
         )
 
         # Instances
-        self.btn_instances = cast(Any, ttk.Button)(
-            top_bar, text="", command=self.app.open_instance_manager, bootstyle="link"
+        self.btn_instances = ttk.Button(
+            top_bar,
+            text="",
+            command=self.app.open_instance_manager,
+            style="Link.TButton",
         )
         self.btn_instances.pack(side="left", padx=2)
         ToolTip(self.btn_instances, "Instance Manager")
+
         # Profiles
-        self.btn_profiles = cast(Any, ttk.Button)(
-            top_bar, text="", command=self.app.open_profile_manager, bootstyle="link"
+        self.btn_profiles = ttk.Button(
+            top_bar,
+            text="",
+            command=self.app.open_profile_manager,
+            style="Link.TButton",
         )
         self.btn_profiles.pack(side="left", padx=2)
         ToolTip(self.btn_profiles, "Profiles")
+
         # Settings
-        self.btn_settings = cast(Any, ttk.Button)(
-            top_bar, text="", command=self.app.open_settings_dialog, bootstyle="link"
+        self.btn_settings = ttk.Button(
+            top_bar,
+            text="",
+            command=self.app.open_settings_dialog,
+            style="Link.TButton",
         )
         self.btn_settings.pack(side="left", padx=2)
         ToolTip(self.btn_settings, "Settings")
+
         # SDK / DevTools
-        self.btn_devtools = cast(Any, ttk.Button)(
-            top_bar, text="", command=self.app.open_developer_tools, bootstyle="link"
+        self.btn_devtools = ttk.Button(
+            top_bar,
+            text="",
+            command=self.app.open_developer_tools,
+            style="Link.TButton",
         )
         self.btn_devtools.pack(side="left", padx=2)
         ToolTip(self.btn_devtools, "Developer Tools / SDK")
+
         # Mod Website
-        self.btn_website = cast(Any, ttk.Button)(
+        self.btn_website = ttk.Button(
             top_bar,
             text="",
             command=self.app.open_current_instance_website,
-            bootstyle="link",
+            style="Link.TButton",
         )
         self.btn_website.pack(side="left", padx=2)
         ToolTip(self.btn_website, "Open Mod Source Website")
@@ -485,25 +501,25 @@ class DashboardView(ttk.Frame):
         self.patch_btn.pack(side="right", padx=(5, 0))
 
         # Refresh
-        self.btn_refresh = cast(Any, ttk.Button)(
-            self.command_bar, text="", command=self.app.load_mods, bootstyle="link"
+        self.btn_refresh = ttk.Button(
+            self.command_bar, text="", command=self.app.load_mods, style="Link.TButton"
         )
         self.btn_refresh.pack(side="right", padx=2)
         ToolTip(self.btn_refresh, "Refresh Mod List")
 
         # Add Mod
-        self.btn_add = cast(Any, ttk.Button)(
-            self.command_bar, text="", command=self._add_mod, bootstyle="link"
+        self.btn_add = ttk.Button(
+            self.command_bar, text="", command=self._add_mod, style="Link.TButton"
         )
         self.btn_add.pack(side="right", padx=2)
         ToolTip(self.btn_add, "Add Mod from File")
 
         # Merge Studio
-        self.btn_merge = cast(Any, ttk.Button)(
+        self.btn_merge = ttk.Button(
             self.command_bar,
             text="",
             command=self._open_merge_studio,
-            bootstyle="link",
+            style="Link.TButton",
         )
         self.btn_merge.pack(side="right", padx=2)
         ToolTip(self.btn_merge, "Merge Studio")

@@ -241,21 +241,20 @@ class InstanceManager(tk.Toplevel):
         self.status_container.pack(side="top", anchor="center", pady=(0, 5))
         self.ico_activate = load_icon("check.png", size=(16, 16))
         self.ico_active_label = load_icon("square-check.png", size=(18, 18))
-        self.btn_activate = cast(Any, ttk.Button)(
+        self.btn_activate = ttk.Button(
             self.status_container,
             text=" Activate",
             image=self.ico_activate or "",
             compound="left",
-            bootstyle="success",
+            style="success.TButton",
             command=self._switch_instance,
         )
-
-        self.lbl_active = cast(Any, ttk.Label)(
+        self.lbl_active = ttk.Label(
             self.status_container,
             text=" Active",
             image=self.ico_active_label or "",
             compound="left",
-            bootstyle="success",
+            style="success.TLabel",
             font=("Segoe UI", 10, "bold"),
         )
 
@@ -314,21 +313,20 @@ class InstanceManager(tk.Toplevel):
         row2.pack(fill="x", pady=(0, 15))
 
         self.ico_trash = load_icon("trash-2.png", size=(18, 18))
-        self.btn_del = cast(Any, ttk.Button)(
+        self.btn_del = ttk.Button(
             tools_row,
             image=self.ico_trash or "",
             command=self._remove_instance,
-            bootstyle="link-danger",
+            style="danger.Link.TButton",
             cursor="hand2",
         )
         self.btn_del.pack(side="right", padx=(5, 0))
-
         self.ico_folder = load_icon("folder-open.png", size=(18, 18))
-        self.btn_folder = cast(Any, ttk.Button)(
+        self.btn_folder = ttk.Button(
             tools_row,
             image=self.ico_folder or "",
             command=self._open_instance_folder,
-            bootstyle="link-info",
+            style="info.Link.TButton",
             cursor="hand2",
         )
         self.btn_folder.pack(side="right")
