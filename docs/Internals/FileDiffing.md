@@ -6,9 +6,8 @@ GMOS uses an internal diff/patch engine optimized for text-based modding.
 
 GMOS detects changed files using a two-pass system:
 
-1.  **File Size**: Fast rejection of identical files.
-2.  **MD5 Hash**: Used to verify content identity before diffing.
-3.  **Text Comparison**: If hashes differ, the file is loaded for line-by-line comparison.
+1.  **Filecmp (Size + Byte-by-byte)**: Fast rejection of identical files without loading fully into memory.
+2.  **Text Comparison**: If bytes differ and the file size is under the `GMOS_SMALL_FILE_LIMIT`, it is loaded for line-by-line comparison. Large files skip text merge and are flagged as binary conflicts.
 
 # 2. Textual Diff (Unified Format)
 
@@ -28,11 +27,13 @@ If two mods modify the same file, GMOS flags a conflict.
 
 1.  **Detection**: `analyze_mods_for_conflicts` groups patches by target file.
 2.  **Resolution**:
-    * **Policy Check**: GMOS checks `policy.json` for a pre-existing rule (e.g., "Mod A wins").
-    * **User Prompt**: If no policy exists, the **Resolve Dialog** is shown.
-3.  **Persistence**: The user's choice is saved to `policy.json`, ensuring the decision is remembered for future patch runs.
+    * **Policy Check**: GMOS checks `user_load_order.json` for a pre-existing rule (e.g., "Mod A wins").
+    * **Merge Studio**: If no policy exists, the user opens the **Merge Studio** to visually resolve conflicts.
+        * Users can select a winner (A vs B) or write a **Custom Patch**.
+        * Custom patches are compiled into a generated `GMOS_Unified_Patch` mod.
+3.  **Persistence**: The user's choice is saved to `user_load_order.json`, ensuring the decision is remembered for future patch runs.
 
 # 4. Limitations
 
-* **Text-Based**: The engine operates on lines of text, not an Abstract Syntax Tree (AST).
-* **Formatting**: Changes to indentation or whitespace may generate conflicts even if the logic is semantically identical.
+* **Hybrid Parsing**: GMOS uses a `CSTParser` (Concrete Syntax Tree) to structurally identify functions and variables for targeting. However, the *content* of these blocks is often compared textually during the merge phase.
+* **Formatting**: While the CST helps find code blocks regardless of their position, changes to indentation or whitespace within a block may still generate textual conflicts.

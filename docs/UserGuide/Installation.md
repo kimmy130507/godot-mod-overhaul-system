@@ -81,7 +81,10 @@ If verification fails, contact the project maintainers immediately.
 
 ## 5. Directory Preparation
 
-GMOS requires exactly **one** game directory. Inside that directory, GMOS expects (or will create) a `mods` folder:
+GMOS automatically manages the directory structure. When you add a new Game Instance:
+1.  It creates a `gmos_data` folder for configuration and cache.
+2.  It creates a `mods` folder if one does not exist.
+3.  It verifies the presence of `game.exe` or `project.binary`.
 
 ```
 <GameDir>/
@@ -100,7 +103,9 @@ GMOS requires exactly **one** game directory. Inside that directory, GMOS expect
 2.  **Windows/Linux:** Place `GMOS.exe` (or `GMOS`) anywhere on your system.
     **macOS:** Open `GMOS-Installer.dmg` and drag `GMOS.app` to your Applications folder.
 3.  Launch GMOS.
-4.  Follow the **Setup Wizard** to select your game executable.
+4.  Use the **Instance Manager** to add your game directory and activate it.
+
+See [First Run Guide](docs/ModAuthorGuide/FirstRun.md) for detailed instructions.
 
 ### CLI Mode
 

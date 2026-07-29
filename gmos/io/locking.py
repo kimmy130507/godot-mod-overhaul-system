@@ -1,5 +1,5 @@
 # GMOS - Godot Mod Overhaul System
-# Copyright (C) 2025 Kim
+# Copyright (C) 2025-2026 Kim
 #
 # This file is part of GMOS.
 #
@@ -15,236 +15,154 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with GMOS.  If not, see <https://www.gnu.org/licenses/>.
-
 """
-Locking Subsystem
+Locking Subsystem (Global Singleton Rewrite)
 
-Implements a robust Process Locking mechanism to prevent instance conflicts.
-Follows architectural directives for Concurrency Control:
-1. Smart Grace Period (Livelock Prevention): Handles OS cleanup lag during restarts.
-2. Consistent Handover: Atomically transitions from Global Lock to Game Directory Lock.
-3. Transactional State: Encapsulates lock state in a manager class.
+Enforces a "Single Instance" policy via a global lock file in the temp directory.
 """
 
 import atexit
-import errno
 import os
-import time
-from typing import IO, TYPE_CHECKING, Any, Optional
+import sys
+import tempfile
+from typing import IO, Any, Optional
 
-from gmos.utils import logger, safe_norm
+from gmos.utils import logger
 
-if TYPE_CHECKING:
-    import tkinter as tk
-
-    from gmos.ui import App
-
-    class msvcrt_stub:
-        def locking(self, fd: int, mode: int, nbytes: int) -> None: ...
-
-        LK_UNLCK: int
-        LK_NBLCK: int
-
-    msvcrt: Optional[msvcrt_stub]
-
-# Platform-specific imports
-try:
-    import fcntl
-except ImportError:
-    fcntl = None  # type: ignore[assignment]
-try:
-    import msvcrt  # type: ignore[assignment]
-except ImportError:
-    msvcrt = None  # type: ignore[assignment]
-
-
-def _pid_running(pid: int) -> bool:
-    """Check if a process with the given PID is currently running."""
+# Platform-specific locking mechanisms
+msvcrt: Optional[Any] = None
+fcntl: Optional[Any] = None
+if sys.platform == "win32":
     try:
-        if pid <= 0:
-            return False
-        os.kill(pid, 0)  # Signal 0 checks existence without killing
-    except OSError as e:
-        # ESRCH: No such process (it's gone)
-        if getattr(e, "errno", None) == errno.ESRCH:
-            return False
-        # EPERM: Process exists but we can't signal it (it's running)
-        if getattr(e, "errno", None) == errno.EPERM:
-            return True
-        return False
-    except Exception:
-        return False
-    return True
+        import msvcrt as _msvcrt
+
+        msvcrt = _msvcrt
+    except ImportError:
+        pass
+else:
+    try:
+        import fcntl as _fcntl
+
+        fcntl = _fcntl
+    except ImportError:
+        pass
+
+
+# Fixed lock file in temp directory ensures cross-instance visibility.
+LOCK_FILENAME = "gmos_singleton.lock"
+LOCK_FILE_PATH = os.path.join(tempfile.gettempdir(), LOCK_FILENAME)
 
 
 class LockManager:
     """
-    Manages the lifecycle of the application's single-instance lock.
-    Handles the transition (handover) from Global Lock to Game-Specific Lock.
+    Manages the global application lock.
     """
 
     def __init__(self) -> None:
         self._lock_fd: Optional[IO[bytes]] = None
-        self._lock_path: Optional[str] = None
-        self._paused: bool = False
+        self._lock_path = LOCK_FILE_PATH
         atexit.register(self.release)
 
     @property
-    def current_path(self) -> Optional[str]:
+    def current_path(self) -> str:
         return self._lock_path
 
-    def pause_watcher(self) -> None:
-        """Temporarily prevent automatic lock switching."""
-        self._paused = True
-
-    def resume_watcher(self) -> None:
-        """Resume automatic lock switching."""
-        self._paused = False
-
-    def _low_level_lock(self, fd: IO[bytes]) -> bool:
-        """Apply OS-level non-blocking lock to file descriptor."""
-        if msvcrt:
-            try:
-                msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
-                return True
-            except OSError:
-                return False
-        elif fcntl:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return True
-            except (IOError, OSError):
-                return False
-        return True  # No locking mechanism available, assume success (risky but rare)
-
-    def _low_level_unlock(self, fd: IO[bytes]) -> None:
-        """Release OS-level lock."""
-        try:
-            if msvcrt:
-                fd.seek(0)
-                msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
-            elif fcntl:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        except Exception:
-            pass
-
-    def acquire(self, path: str, graceful_restart: bool = True) -> bool:
+    def acquire(
+        self, path: Optional[str] = None, graceful_restart: bool = False
+    ) -> bool:
         """
-        Attempt to acquire the lock at `path`.
+        Attempts to acquire the global singleton lock.
 
         Args:
-            path: The file path to lock.
-            graceful_restart: If True, waits 0.5s if a stale lock is detected (Livelock Prevention).
+            path: Ignored (kept for legacy compatibility).
+            graceful_restart: Ignored (legacy compatibility).
 
         Returns:
-            True if acquired, False if occupied.
+            True if this instance successfully acquired the lock.
+            False if another instance is already running.
         """
-        path = os.path.abspath(path)
-
-        # 1. Idempotency Check
-        if self._lock_fd and self._lock_path == path:
+        if self._lock_fd:
             return True
-
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-
-        # 2. Check for existing owner (Smart Grace Period)
-        if os.path.exists(path):
-            owner_pid = self._read_owner_pid(path)
-            if owner_pid and _pid_running(owner_pid):
-                if graceful_restart:
-                    logger.info(
-                        "Lock held by PID %s. Waiting 0.5s for cleanup...", owner_pid
-                    )
-                    time.sleep(0.5)
-                    # Recursively retry once with grace=False
-                    return self.acquire(path, graceful_restart=False)
-                else:
-                    logger.warning("Lock acquisition failed. Active PID: %s", owner_pid)
-                    return False
-
-        # 3. Attempt Acquisition
+        fd = None
         try:
-            # Open in r+b to allow reading/writing without truncating immediately
-            # If file doesn't exist, 'w+b' ensures creation.
-            mode = "r+b" if os.path.exists(path) else "w+b"
-            fd = open(path, mode)
+            mode = "r+b" if os.path.exists(self._lock_path) else "w+b"
+            fd = open(self._lock_path, mode)
 
-            if not self._low_level_lock(fd):
-                fd.close()
-                return False
+            if sys.platform == "win32":
+                if not msvcrt:
+                    logger.error("msvcrt module missing on Windows")
+                    return True
+                # Lock 1 byte at start of file. LK_NBLCK raises IOError if fail.
+                msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                if not fcntl:
+                    logger.error("fcntl module missing on Unix")
+                    return True
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-            # 4. We have the lock. Update State.
-            # Truncate and write our PID (Transactional Commit)
             fd.seek(0)
             fd.truncate()
             fd.write(str(os.getpid()).encode("utf-8"))
             fd.flush()
             os.fsync(fd.fileno())
 
-            # 5. Release old lock if we held one (Handover)
-            self.release(keep_new_acquired=True)
-
             self._lock_fd = fd
-            self._lock_path = path
-            logger.info("Lock acquired: %s", path)
+            logger.info(f"Global singleton lock acquired: {self._lock_path}")
             return True
 
+        except (IOError, OSError, PermissionError):
+            logger.debug("Another GMOS instance is running (Lock held).")
+            if fd:
+                try:
+                    fd.close()
+                except Exception:
+                    pass
+            return False
         except Exception as e:
-            logger.error("Error acquiring lock %s: %s", path, e)
+            logger.exception(f"Unexpected error acquiring lock: {e}")
             return False
 
     def release(self, keep_new_acquired: bool = False) -> None:
-        """
-        Release the current lock.
-        Args:
-            keep_new_acquired: If True, this is part of a handover, so don't run atexit cleanup yet.
-        """
+        """Releases the global lock."""
         if self._lock_fd:
             try:
-                self._low_level_unlock(self._lock_fd)
+                if sys.platform == "win32" and msvcrt:
+                    self._lock_fd.seek(0)
+                    msvcrt.locking(self._lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+                elif sys.platform != "win32" and fcntl:
+                    fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+
                 self._lock_fd.close()
-
-                # Cleanup file if we owned it
-                if self._lock_path and os.path.exists(self._lock_path):
-                    # Check if it still contains our PID before deleting
-                    # (Prevent deleting a lock file if another process just stole it - unlikely with OS locks but safer)
-                    if self._read_owner_pid(self._lock_path) == os.getpid():
-                        try:
-                            os.remove(self._lock_path)
-                        except OSError:
-                            pass
+                logger.info("Global lock released.")
             except Exception as e:
-                logger.debug("Error releasing lock: %s", e)
+                logger.error(f"Error releasing lock: {e}")
+            finally:
+                self._lock_fd = None
+                # Do NOT remove file to prevent race conditions during close.
 
-            self._lock_fd = None
-            self._lock_path = None
+    # --- Legacy Internal Stubs ---
+    def pause_watcher(self) -> None:
+        """No-op."""
 
-    def _read_owner_pid(self, path: str) -> Optional[int]:
-        try:
-            with open(path, "rb") as f:
-                content = f.read().strip()
-                if content:
-                    return int(content)
-        except (ValueError, OSError):
-            pass
-        return None
+    def resume_watcher(self) -> None:
+        pass
 
 
-# Singleton Instance
+# ==============================================================================
+# SINGLETON INSTANCE & LEGACY COMPATIBILITY API
+# ==============================================================================
+# The following functions maintain the API signature expected by main.py and ui/app.py
+# but redirect logic to the new Global Singleton manager.
+
 manager = LockManager()
-
-# --- Legacy/Compatibility API ---
-# These functions route to the manager to maintain backward compatibility with existing calls.
 
 
 def acquire_app_lock(lock_path: Optional[str] = None, retry_once: bool = True) -> bool:
-    if lock_path is None:
-        from gmos.utils import LOCK_PATH as DEFAULT_LOCK_PATH
-
-        lock_path = DEFAULT_LOCK_PATH
-    return manager.acquire(lock_path, graceful_restart=retry_once)
+    """
+    Main entry point for locking.
+    Redirects to global singleton acquisition regardless of 'lock_path'.
+    """
+    return manager.acquire()
 
 
 def release_app_lock() -> None:
@@ -252,122 +170,15 @@ def release_app_lock() -> None:
 
 
 def pause_game_dir_watcher() -> None:
-    """Temporarily suspend automatic game_dir switching (use in try/finally)."""
-    manager.pause_watcher()
+    """No-op."""
+    pass
 
 
 def resume_game_dir_watcher() -> None:
-    """Resume automatic game_dir switching."""
-    manager.resume_watcher()
+    """No-op."""
+    pass
 
 
-# --- UI Integration ---
-
-
-def wire_game_dir_locking(app: "App") -> None:
-    """
-    Watch app.vars['game_dir'] and switch the lock automatically.
-
-    Refactored to:
-    1. Listen to 'game_dir' (Current UI variable).
-    2. Use the LockManager for atomic handover.
-    """
-    try:
-        # Check safely for the variable map
-        if not hasattr(app, "vars"):
-            return
-
-        target_var_name = "game_dir"
-
-        if target_var_name not in app.vars:
-            logger.debug(
-                "wire_game_dir_locking: '%s' not found in app.vars", target_var_name
-            )
-            return
-
-        var: "tk.StringVar" = app.vars[target_var_name]
-
-        def _on_change(*_: Any) -> None:
-            if manager._paused:  # type: ignore [reportPrivateUsage]
-                return
-
-            new_dir = safe_norm(var.get())
-            if not new_dir or not os.path.isdir(new_dir):
-                return
-
-            # Construct the game-specific lock path
-            # Strategy: <GameDir>/.gmos.lock
-            new_lock_path = os.path.join(new_dir, ".gmos.lock")
-
-            # Idempotency check handled inside manager.acquire
-            success = manager.acquire(new_lock_path)
-
-            if not success:
-                # Critical Failure: Lock Acquisition Failed.
-                # ACTION: LOCK REJECTION (Force Revert)
-                # We must prevent the UI from pointing to a directory we do not own.
-
-                app.append_log(f"LOCK REJECTED: Could not acquire lock for {new_dir}")
-
-                from tkinter import messagebox
-
-                messagebox.showerror(
-                    "Lock Rejected",
-                    f"Cannot switch to:\n{new_dir}\n\n"
-                    "Another GMOS instance is already managing this game.\n"
-                    "The setting will be reverted.",
-                )
-
-                # 1. Determine the safe fallback path (where we currently hold the lock)
-                # If we have a current lock path, revert to its directory.
-                # If we have no lock (startup), revert to empty string.
-                safe_fallback = ""
-                if manager.current_path:
-                    # manager.current_path is full file path (e.g. .../.gmos.lock)
-                    # We need the directory part.
-                    safe_fallback = os.path.dirname(manager.current_path)
-
-                # 2. Pause the watcher to prevent infinite recursion
-                # (changing the var triggers _on_change again!)
-                manager.pause_watcher()
-                try:
-                    var.set(safe_fallback)
-
-                    # Force-reset dependent paths to defaults to match the fallback state.
-                    # This prevents the UI from holding "stale" paths from the failed attempt.
-                    if "mods_dir" in app.vars:
-                        # If falling back to a game, assume default 'mods' folder.
-                        # If falling back to empty, reset to relative default.
-                        fallback_mods = (
-                            os.path.join(safe_fallback, "mods")
-                            if safe_fallback
-                            else "mods"
-                        )
-                        app.vars["mods_dir"].set(fallback_mods)
-
-                    if "game_executable" in app.vars:
-                        # Reset to basic default
-                        app.vars["game_executable"].set("game.exe")
-
-                    if "launch_override" in app.vars:
-                        app.vars["launch_override"].set("")
-
-                    app.append_log(
-                        f"Reverted configuration to safe state: '{safe_fallback}'"
-                    )
-                finally:
-                    manager.resume_watcher()
-
-        # Attach trace
-        try:
-            var.trace_add("write", _on_change)
-        except AttributeError:
-            # Fallback for older python/tk versions
-            var.trace("w", _on_change)  # type: ignore
-
-        # Trigger once to transition from Global -> Initial Game Dir (if set)
-        if var.get():
-            _on_change()
-
-    except Exception as e:
-        logger.exception("Failed to wire game_dir locking: %s", e)
+def wire_game_dir_locking(app: Any) -> None:
+    """No-op: Singleton mode uses global lock."""
+    logger.debug("Singleton Mode Active.")

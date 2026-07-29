@@ -17,14 +17,15 @@ pytest --cov=. --cov-report=term
 
 # 2. Test Structure
 
-The test suite mirrors the source code's "5-Pillar" architecture:
+The test suite mirrors the source code's "6-Pillar" architecture:
 
 ```
 tests/
-    core/       # Session, Patcher, Security, Injection
+    core/       # Session, Patcher, Security, Injection, GDScript Parser, SDK
     io/         # Locking, PCK, Atomic Writes
+    net/        # Downloader, API Providers, Install Flow
     state/      # Config, Policy, Profiles
-    ui/         # Dialogs, HunkViewer (Headless/Mocked)
+    ui/         # Dialogs, Merger, Manager, Settings (Headless/Mocked)
     utils/      # Path helpers, Logging
     data/       # Test fixtures (sample mods, dummy PCKs)
 ```

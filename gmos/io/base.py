@@ -1,5 +1,5 @@
 # GMOS - Godot Mod Overhaul System
-# Copyright (C) 2025 Kim
+# Copyright (C) 2025-2026 Kim
 #
 # This file is part of GMOS.
 #
@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Generator, List, Optional, Tuple, cast
+from typing import Any, Callable, Generator, List, Optional, Tuple, Union, cast
 
 from gmos.utils import (
     check_write_permission,
@@ -43,8 +43,7 @@ from gmos.utils import (
     retry_on_permission,
 )
 
-# Global registry for path-based locks using weak references.
-# This ensures exact locking semantics per file path without memory leaks.
+# Registry for path-based locks
 _path_locks: weakref.WeakValueDictionary[str, threading.RLock] = (
     weakref.WeakValueDictionary()
 )
@@ -52,7 +51,7 @@ _path_locks_mutex = threading.Lock()
 
 
 def _get_path_lock(path: str) -> threading.RLock:
-    """Return a unique RLock for the given absolute path, creating it if necessary."""
+    """Return a unique RLock for the path."""
     ap = os.path.abspath(path)
     with _path_locks_mutex:
         lock = _path_locks.get(ap)
@@ -64,9 +63,7 @@ def _get_path_lock(path: str) -> threading.RLock:
 
 @contextmanager
 def path_lock(path: str) -> Generator[None, None, None]:
-    """
-    Acquires the in-process, per-path lock for serialization.
-    """
+    """Acquires the in-process, per-path lock."""
     lock = _get_path_lock(path)
     lock.acquire()
     try:
@@ -79,48 +76,37 @@ def path_lock(path: str) -> Generator[None, None, None]:
 def _temp_file_context(
     parent_dir: str, prefix: str = ".gmos_tmp_"
 ) -> Generator[Path, None, None]:
-    """
-    Context manager for creating and cleaning up a temporary file.
-    Yields the temporary file Path object.
-    Ensures cleanup on success or failure.
-    """
+    """Context manager for temporary files."""
     fd, tmp_path_str = fast_tempfile(parent_dir, prefix=prefix)
     os.close(fd)  # Close descriptor immediately
     tmp_p = Path(tmp_path_str)
     try:
         yield tmp_p
     finally:
-        # We aggressively remove our *own* temp file.
+        # Aggressively remove temp file
         if tmp_p.exists():
             try:
-                # safe_remove includes its own retries/backoff on permission/lock errors
                 retry_on_permission(
                     lambda: safe_remove(str(tmp_p)), parent=None, path=str(tmp_p)
                 )
             except Exception:
-                # We swallow cleanup failure exceptions to not mask the primary exception
-                # from the atomic operation (which the test expects), but log it.
                 try:
                     logger.debug("cleanup failed for %s", tmp_p)
                 except Exception:
                     pass
 
 
-# --- Concurrency Infrastructure ---
+# Concurrency Infrastructure
 _io_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
 _io_executor_lock = threading.Lock()
 
 
 def get_io_executor(max_workers: int = 8) -> concurrent.futures.ThreadPoolExecutor:
-    """
-    Get or create the global ThreadPoolExecutor for I/O bound tasks.
-    Centralized concurrency management for non-blocking operations.
-    """
+    """Get or create the global ThreadPoolExecutor."""
     global _io_executor
     if _io_executor is None:
         with _io_executor_lock:
             if _io_executor is None:
-                # Default to 8 workers for I/O bound operations (file copy/hash/scan)
                 _io_executor = concurrent.futures.ThreadPoolExecutor(
                     max_workers=max_workers, thread_name_prefix="gmos_io_worker"
                 )
@@ -138,10 +124,7 @@ def shutdown_io_executor(wait: bool = True) -> None:
 
 def sweep_orphan_gmos_temps(paths: List[str], *, age_threshold: float = 300.0) -> int:
     """
-    Best-effort: remove orphaned .gmos_tmp_* files under the supplied directories
-    that are older than `age_threshold` seconds. Returns number of removed files.
-
-    Use this once at startup (CLI or service init), NOT in per-operation finally blocks.
+    Removes orphaned .gmos_tmp_* files older than `age_threshold` seconds.
 
     :param paths: A list of directory paths (str) to scan for orphaned files.
     :param age_threshold: Minimum age (in seconds) for a file to be considered orphaned.
@@ -158,17 +141,13 @@ def sweep_orphan_gmos_temps(paths: List[str], *, age_threshold: float = 300.0) -
             if not os.path.isdir(base):
                 continue
 
-            # 2. Acquire directory-level lock to avoid racing with concurrent sweeps
             with path_lock(os.path.abspath(base)):
                 with os.scandir(base) as scanner:
                     for entry in scanner:
-                        # 3. Target only the specific temporary files
                         if not entry.name.startswith(".gmos_tmp_"):
                             continue
 
-                        # 4. Inner try-except for file stat/removal failure
                         try:
-                            # entry.stat() is often cached on Windows/Linux in scandir results
                             if entry.stat().st_mtime < age_boundary:
                                 full_path = entry.path
                                 retry_on_permission(
@@ -193,10 +172,7 @@ def sweep_orphan_gmos_temps(paths: List[str], *, age_threshold: float = 300.0) -
 
 def _probe_no_share_open(path: str) -> Tuple[bool, Optional[int]]:
     """
-    Attempt to open 'path' with NO sharing on Windows (CreateFileW with no SHARE flags).
-    Returns (ok, winerr) where ok True means we got a handle (so file not exclusively locked).
-    On non-Windows, returns (True, None).
-    This is a *probe* only; it closes the handle immediately. Use only for detection/backoff.
+    Probes if a file is exclusively locked on Windows.
     """
     if os.name != "nt":
         return True, None
@@ -240,9 +216,7 @@ def _probe_no_share_open(path: str) -> Tuple[bool, Optional[int]]:
 
 
 def _movefileex_replace(src: str, dst: str) -> bool:
-    """Windows last-resort rename: MoveFileExW with REPLACE_EXISTING | WRITE_THROUGH.
-    Returns True on success, False otherwise. No-op on non-Windows.
-    """
+    """Windows: MoveFileExW with REPLACE_EXISTING | WRITE_THROUGH."""
     if os.name != "nt":
         return False
     try:
@@ -263,11 +237,7 @@ def _movefileex_replace(src: str, dst: str) -> bool:
 
 
 def _dump_internal_diagnostics(tag: str, target_path: str) -> None:
-    """
-    Dump thread stacks and (if available) process open files into the logger.
-    tag: small label for context, e.g. "replace-lock-self"
-    target_path: the path being probed/removed
-    """
+    """Dump thread stacks and process open files to log."""
     try:
         logger.error("INTERNAL DIAGNOSTIC DUMP (%s) for %s", tag, target_path)
 
@@ -275,7 +245,7 @@ def _dump_internal_diagnostics(tag: str, target_path: str) -> None:
         logger.error("Diagnostic timestamp: %s", time.strftime("%Y-%m-%dT%H:%M:%S"))
 
         # thread stacks
-        frames = sys._current_frames()  # type: ignore[reportPrivateUsage]
+        frames = sys._current_frames()  # type: ignore[reportPrivateUsage, unused-ignore]
         for tid, frame in frames.items():
             try:
                 # find thread name
@@ -337,8 +307,7 @@ def replace_with_retries(
     src_temp: str, dst: str, max_attempts: int = 4, base_delay: float = 0.02
 ) -> None:
     """
-    Fast, minimal version: only retries on actual WinError 5/32/EACCES/EBUSY.
-    No pre-probing. Uses exponential backoff. Windows fallback retained.
+    Retries replacement on WinError 5/32/EACCES/EBUSY.
     """
     last_exc: Optional[Exception] = None
     dst_p = Path(dst)
@@ -353,9 +322,8 @@ def replace_with_retries(
                 winerr = getattr(e, "winerror", None)
                 errn = getattr(e, "errno", None)
 
-                # Only treat these as retry-eligible
+                # Retry-eligible errors
                 if winerr in (5, 32) or errn in (errno.EACCES, errno.EBUSY):
-                    # Try to clear readonly attribute
                     try:
                         if dst_p.exists():
                             st_mode = dst_p.stat().st_mode
@@ -363,7 +331,7 @@ def replace_with_retries(
                     except Exception:
                         pass
 
-                    # Exponential backoff w/ jitter
+                    # Exponential backoff
                     if attempt < max_attempts:
                         sleep_time = min(
                             0.5,
@@ -374,7 +342,6 @@ def replace_with_retries(
                         time.sleep(sleep_time)
                         continue
 
-                # Not retryable → break and use fallback
                 break
 
     # Windows fallback: MoveFileExW
@@ -385,7 +352,7 @@ def replace_with_retries(
         except Exception:
             pass
 
-    # Fallback: shutil.copy2
+    # Fallback
     src_p = Path(src_temp)
     try:
         shutil.copy2(src_temp, dst)
@@ -407,7 +374,7 @@ def replace_with_retries(
         else:
             raise copy_exc
 
-    # Cleanup temp
+    # Cleanup
     try:
         if src_p.exists():
             try:
@@ -422,9 +389,82 @@ def replace_with_retries(
         pass
 
 
+class AtomicFile:
+    """
+    Robust atomic file operations (Write-Aside -> Replace).
+    """
+
+    def __init__(self, path: str):
+        self.path = Path(path).resolve()
+
+    def write(
+        self,
+        content: Union[str, bytes],
+        backup: bool = False,
+        mode: Optional[int] = 0o666,
+        encoding: str = "utf-8",
+    ) -> None:
+        """Atomically writes content to the file."""
+        path_str = str(self.path)
+        parent_dir = self.path.parent
+
+        try:
+            parent_dir.mkdir(parents=True, exist_ok=True)
+            ok, err = check_write_permission(path_str)
+            if not ok:
+                if not self.path.exists():
+                    ok_p, err_p = check_write_permission(str(parent_dir))
+                    if not ok_p:
+                        raise RuntimeError(
+                            err_p or f"No write permission for directory '{parent_dir}'"
+                        )
+                else:
+                    raise RuntimeError(
+                        err or f"No write permission for file '{self.path}'"
+                    )
+        except Exception as e:
+            handle_permission_error(e, path_str)
+            raise
+
+        if backup and self.path.exists():
+            bak_path = self.path.with_name(self.path.name + ".bak")
+            if not bak_path.exists():
+                try:
+                    current_bytes = safe_read_bytes(path_str)
+                    AtomicFile(str(bak_path)).write(
+                        current_bytes, backup=False, mode=None
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to create backup for {self.path}: {e}")
+
+        with _temp_file_context(str(parent_dir), prefix=".atomic_") as tmp_path:
+            tmp_str = str(tmp_path)
+
+            if isinstance(content, str):
+                with open(tmp_str, "w", encoding=encoding) as f:
+                    f.write(content)
+            else:
+                with open(tmp_str, "wb") as f:
+                    f.write(content)
+
+            if mode is not None:
+                try:
+                    retry_on_permission(
+                        lambda: safe_chmod(tmp_str, mode), parent=None, path=tmp_str
+                    )
+                except Exception:
+                    pass  # Chmod failure is non-critical on some FS
+
+            retry_on_permission(
+                lambda: replace_with_retries(tmp_str, path_str),
+                parent=None,
+                path=path_str,
+            )
+
+
 @dataclass
 class ReplaceDiagnostics:
-    """Diagnostics/result object for background replace tasks."""
+    """Result object for background replace tasks."""
 
     src: str
     dst: str
@@ -452,13 +492,7 @@ def start_replace_task(
     poll_interval: float = 0.08,
 ) -> tuple[ReplaceDiagnostics, threading.Thread]:
     """
-    Start a background replace operation that retries on transient errors and reports progress.
-
-    - done_cb(diag) will be called in the worker thread when finished (success/failure/cancel).
-      If you need the callback to run in the GUI thread, schedule it via `tk.after` inside your done_cb.
-    - progress_cb(progress: float) is called with values in [0.0..1.0] periodically.
-    - cancel_event: optional threading.Event() that, when set, requests cancellation.
-    Returns a ReplaceDiagnostics instance (populated in-place) and the worker Thread.
+    Start a background replace operation.
     """
     diag = ReplaceDiagnostics(src=src, dst=dst, attempts_allowed=attempts)
     dst_p = Path(dst)
@@ -503,7 +537,6 @@ def start_replace_task(
                     time.sleep(sleep)
                     continue
                 else:
-                    # non-transient, stop retrying
                     diag.last_exception = e
                     break
 
@@ -516,7 +549,6 @@ def start_replace_task(
                 progress_cb(1.0 if diag.success else 0.0)
             except Exception:
                 pass
-        # Call done callback (worker thread). Caller should marshal to GUI thread if needed.
         try:
             done_cb(diag)
         except Exception:
@@ -531,57 +563,26 @@ def start_replace_task(
 
 def safe_atomic_write(dst_path: str, data: bytes, *, mode: int = 0o666) -> bool:
     """Atomically write bytes to dst_path with permission checks."""
-    dst_p = Path(dst_path)
     try:
-        ok, err = check_write_permission(str(dst_p))
-        if not ok:
-            raise RuntimeError(err or f"No write permission to '{dst_p}'")
-
-        parent_p = dst_p.parent
-        parent_p.mkdir(parents=True, exist_ok=True)
-
-        with _temp_file_context(str(parent_p), prefix=".gmos_tmp_") as tmp_p:
-            # 1. Write to temp file
-            with tmp_p.open("wb") as f:
-                f.write(data)
-
-            # 2. Apply permissions (using retry_on_permission helper)
-            try:
-                retry_on_permission(
-                    lambda: safe_chmod(str(tmp_p), mode), parent=None, path=str(tmp_p)
-                )
-            except Exception:
-                try:
-                    logger.debug("chmod failed for %s", tmp_p)
-                except Exception:
-                    pass
-            time.sleep(0.05)  # This delay was in the original, keeping it.
-
-            # 3. Perform the atomic replacement
-            retry_on_permission(
-                lambda: replace_with_retries(str(tmp_p), str(dst_p)),
-                parent=None,
-                path=str(dst_p),
-            )
-
-        # 4. Cleanup is handled by the context manager's finally block.
+        AtomicFile(dst_path).write(data, mode=mode)
         return True
-
     except Exception as e:
-        try:
-            handle_permission_error(e, str(dst_p))
-        except Exception as e:
-            logger.debug("handle_permission_error failed for %s: %s", dst_p, e)
-            pass
+        logger.debug(f"safe_atomic_write failed: {e}")
         raise
 
 
 def safe_write_text(path: str, text: str, encoding: str = "utf-8") -> bool:
-    return safe_atomic_write(path, text.encode(encoding))
+    """Atomically write text to path."""
+    try:
+        AtomicFile(path).write(text, mode=0o666, encoding=encoding)
+        return True
+    except Exception as e:
+        logger.debug(f"safe_write_text failed: {e}")
+        raise
 
 
 def safe_copy2(src: str, dst: str) -> Any:
-    """Wrapper around shutil.copy2 that checks permissions and reports friendly errors."""
+    """shutil.copy2 wrapper with permission checks."""
     try:
         ok, err = check_write_permission(dst)
         if not ok:
@@ -593,8 +594,7 @@ def safe_copy2(src: str, dst: str) -> Any:
 
 
 def safe_remove(path: str) -> None:
-    """Wrapper around os.remove that checks permissions and reports friendly errors."""
-    # Define constants for clarity
+    """os.remove wrapper with permission checks and retry logic."""
     WIN_ERROR_FILE_IN_USE = 32
     MAX_RETRIES = 6
     RETRY_DELAY = 0.1  # seconds
@@ -710,8 +710,7 @@ def safe_chmod(path: str, mode: int) -> None:
 
 def safe_read_bytes(path: str) -> bytes:
     try:
-        with Path(path).open("rb") as f:
-            return f.read()
+        return Path(path).read_bytes()
     except Exception as e:
         logger.debug("safe_read_bytes failed for %s: %s", path, e)
         raise
@@ -719,8 +718,7 @@ def safe_read_bytes(path: str) -> bytes:
 
 def safe_read_text(path: str, encoding: str = "utf-8") -> str:
     try:
-        with Path(path).open("r", encoding=encoding) as f:
-            return f.read()
+        return Path(path).read_text(encoding=encoding)
     except Exception as e:
         logger.debug("safe_read_text failed for %s: %s", path, e)
         raise
@@ -744,12 +742,24 @@ def safe_read_json(path: str, **json_kwargs: Any) -> Any:
         raise
 
 
+def _on_rm_error(func: Callable[[str], None], path: str, exc: BaseException) -> None:
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    except Exception:
+        pass
+
+
 def safe_rmtree(path: str) -> None:
     try:
         ok, err = check_write_permission(path)
         if not ok and os.path.exists(path):  # os.path.exists is fine for a dir
             raise RuntimeError(err or f"No permission to remove tree '{path}'")
-        return shutil.rmtree(path)
+        rmtree_func = cast(Any, shutil.rmtree)
+        if sys.version_info >= (3, 12):
+            rmtree_func(path, onexc=_on_rm_error)
+        else:
+            rmtree_func(path, onerror=_on_rm_error)
     except Exception as e:
         handle_permission_error(e, path)
         raise
@@ -766,68 +776,84 @@ def atomic_write_copy(src_path: str, dst_path: str) -> None:
     ddir_p.mkdir(parents=True, exist_ok=True)
 
     with _temp_file_context(str(ddir_p), prefix=".atomic-") as tmp_p:
-        # use shutil.copyfileobj with a larger buffer to avoid reading whole file into memory
-        bufsize = 1024 * 1024  # 1 MiB
-        with src_p.open("rb") as fr, tmp_p.open("wb") as fw:
-            shutil.copyfileobj(fr, fw, length=bufsize)
-        try:
-            st = src_p.stat()
-            try:
-                retry_on_permission(
-                    lambda: safe_chmod(str(tmp_p), stat.S_IMODE(st.st_mode)),
-                    parent=None,
-                    path=str(tmp_p),
-                )
-            except Exception:
-                try:
-                    logger.debug("failed setting mode for %s", tmp_p)
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.debug("ignored exception: %s", e)
-
+        shutil.copy2(src_p, tmp_p)
         replace_with_retries(str(tmp_p), str(dst_p))
 
 
-def atomic_replace(target_path: str, text: str) -> None:
-    p = Path(target_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
+def create_symlink(src: str, dst: str) -> bool:
+    """
+    Creates a symbolic link at 'dst' pointing to 'src'.
+    Handles Windows privilege checks and platform differences.
+    Returns True if successful, False if failed (fallback required).
+    """
+    src_p = Path(src).resolve()
+    dst_p = Path(dst)
 
-    with _temp_file_context(str(p.parent)) as tmp_p:
-        # write the temporary file with retry semantics
-        try:
-            retry_on_permission(
-                lambda: safe_write_text(str(tmp_p), text), parent=None, path=str(tmp_p)
+    dst_p.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if dst_p.exists() or dst_p.is_symlink():
+            if dst_p.is_dir() and not dst_p.is_symlink():
+                # Safety: Don't delete real directories via this generic function
+                return False
+            safe_remove(str(dst_p))
+
+        os.symlink(src_p, dst_p)
+        return True
+
+    except OSError as e:
+        # Windows: OSError [WinError 1314] A required privilege is not held by the client
+        if os.name == "nt" and getattr(e, "winerror", 0) == 1314:
+            logger.debug(
+                "Symlink creation failed due to privileges. Enable Developer Mode or Run as Admin."
             )
-        except Exception:
-            # bubble up; context manager will clean up
-            raise
+            return False
+        logger.warning(f"Symlink failed for {dst} -> {src}: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected symlink error: {e}")
+        return False
 
-        # best-effort fsync
-        try:
-            with tmp_p.open("rb") as _f:
+
+class SymlinkManager:
+    """
+    Manages the deployment of the Virtual File System.
+    Tracks which files are symlinked vs hard-copied (fallback).
+    """
+
+    def __init__(self, game_dir: str):
+        self.game_dir = Path(game_dir).resolve()
+
+    def deploy(self, rel_path: str, source_path: str) -> bool:
+        """
+        Deploys a file to the game directory using a symlink.
+        Falls back to Hard Copy if symlinking fails.
+        """
+        dest = self.game_dir / rel_path
+
+        # SAFETY: Create backup if target exists and isn't already a symlink (vanilla file)
+        if dest.exists() and not dest.is_symlink():
+            bak = dest.with_name(dest.name + ".bak")
+            if not bak.exists():
                 try:
-                    os.fsync(_f.fileno())
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                    os.replace(dest, bak)
+                except OSError:
+                    # If replace fails (perms), try copy-delete
+                    atomic_write_copy(str(dest), str(bak))
+                    safe_remove(str(dest))
 
-        # perform the replace
-        try:
-            retry_on_permission(
-                lambda: replace_with_retries(str(tmp_p), str(p)),
-                parent=None,
-                path=str(p),
-            )
-        except Exception:
-            # last-ditch: short cooperative sleep then one more direct attempt
-            try:
-                time.sleep(0.05)
-                replace_with_retries(str(tmp_p), str(p))
-            except Exception:
-                # final failure: allow exception to propagate
-                raise
+        if create_symlink(str(source_path), str(dest)):
+            return True
+
+        # Fallback: Hard Copy (The "Old Way")
+        logger.info(f"Fallback: Hard copying {rel_path}")
+        atomic_write_copy(str(source_path), str(dest))
+        return False
+
+
+def atomic_replace(target_path: str, text: str) -> None:
+    """Legacy wrapper for atomic text write (no backup)."""
+    AtomicFile(target_path).write(text, backup=False)
 
 
 def atomic_copy_with_single_bak(src: str, dst: str) -> None:
@@ -836,78 +862,19 @@ def atomic_copy_with_single_bak(src: str, dst: str) -> None:
     dst_p.parent.mkdir(parents=True, exist_ok=True)
     bak = dst_p.with_name(dst_p.name + ".bak")
 
-    # create .bak if dst exists and bak missing
     if dst_p.exists() and not bak.exists():
-
-        with _temp_file_context(str(dst_p.parent)) as tmp_bak_p:
-            atomic_write_copy(str(dst_p), str(tmp_bak_p))
-            replace_with_retries(str(tmp_bak_p), str(bak))
-
-    # copy to temp then replace
-
-    with _temp_file_context(str(dst_p.parent)) as tmp_p:
-        atomic_write_copy(str(src_p), str(tmp_p))
-        replace_with_retries(str(tmp_p), str(dst_p))
+        atomic_write_copy(str(dst_p), str(bak))
+    atomic_write_copy(str(src_p), str(dst_p))
 
 
 def atomic_write_bytes(dst_path: str, bdata: bytes, *, mode: int = 0o644) -> None:
-    """Write bytes to dst_path atomically in same directory then os.replace."""
-    dst_p = Path(dst_path)
-    ddir_p = dst_p.parent
-    ddir_p.mkdir(parents=True, exist_ok=True)
-
-    with _temp_file_context(str(ddir_p), prefix=".atomic-") as tmp_p:
-
-        try:
-            with tmp_p.open("wb") as f:
-                f.write(bdata)
-        except Exception:
-            # Let context manager clean up
-            raise
-
-        try:
-            retry_on_permission(
-                lambda: safe_chmod(str(tmp_p), mode), parent=None, path=str(tmp_p)
-            )
-        except Exception:
-            try:
-                logger.debug("chmod failed for %s", tmp_p)
-            except Exception:
-                pass
-
-        replace_with_retries(str(tmp_p), str(dst_p))
+    """Legacy wrapper for atomic byte write."""
+    AtomicFile(dst_path).write(bdata, mode=mode, backup=False)
 
 
 def atomic_write_with_backup(target_path: str, new_text: str) -> None:
-    """
-    Write new_text to target_path atomically. Create a single backup file of the original
-    named target + '.bak' only if it does not already exist.
-    """
-    p = Path(target_path)
-    bak = p.with_name(p.name + ".bak")
-
-    # Ensure parent exists
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-    # Create single backup if original exists and no .bak exists yet
-    if p.exists() and not bak.exists():
-
-        with _temp_file_context(str(p.parent)) as tmp_bak_p:
-            atomic_write_copy(str(p), str(tmp_bak_p))
-            replace_with_retries(str(tmp_bak_p), str(bak))
-
-    # Now write new content atomically to target
-
-    with _temp_file_context(str(p.parent)) as tmp_p:
-        try:
-            retry_on_permission(
-                lambda: safe_write_text(str(tmp_p), new_text),
-                parent=None,
-                path=str(tmp_p),
-            )
-        except Exception:
-            raise
-        replace_with_retries(str(tmp_p), str(p))
+    """Legacy wrapper for atomic text write with backup."""
+    AtomicFile(target_path).write(new_text, backup=True)
 
 
 def safe_atomic_copy_with_bak(src: str, dst: str, *args: Any, **kwargs: Any) -> Any:
@@ -922,10 +889,8 @@ def safe_atomic_copy_with_bak(src: str, dst: str, *args: Any, **kwargs: Any) -> 
         if not ok:
             raise RuntimeError(err or "no write permission")
         try:
-            # This is now a local function
             return atomic_copy_with_single_bak(src, dst, *args, **kwargs)
         except ImportError:
-            # fallback: conservative atomic copy (write tmp then replace)
             tmp = dst + ".tmp.fallback"  # Use a more unique name
             bufsize = 1024 * 1024  # 1 MiB
 
@@ -933,11 +898,9 @@ def safe_atomic_copy_with_bak(src: str, dst: str, *args: Any, **kwargs: Any) -> 
                 with open(tmp, "wb") as fw, open(src, "rb") as fr:
                     shutil.copyfileobj(fr, fw, length=bufsize)
 
-                # Just call replace_with_retries, it handles its own loops.
                 replace_with_retries(tmp, dst)
 
             finally:
-                # ensure no stray tmp left on disk if os.replace failed permanently
                 if os.path.exists(tmp):
                     try:
                         retry_on_permission(

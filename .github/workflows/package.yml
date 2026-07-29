@@ -163,6 +163,7 @@ jobs:
       - name: Build with PyInstaller
         run: |
           pyinstaller --clean --noconfirm gmos.spec
+          cp LICENSE dist/
         shell: bash
 
       - name: Create DMG (macOS)
@@ -173,6 +174,7 @@ jobs:
           
           # 2. Move the App Bundle to staging (so we don't include the raw binary or other junk)
           mv "dist/GMOS.app" "dist/dmg-source/"
+          cp LICENSE "dist/dmg-source/"
           
           # 3. Run create-dmg pointing to the staging folder
           create-dmg \

@@ -1,5 +1,5 @@
 # GMOS - Godot Mod Overhaul System
-# Copyright (C) 2025 Kim
+# Copyright (C) 2025-2026 Kim
 #
 # This file is part of GMOS.
 #
@@ -20,13 +20,16 @@
 import sys
 import warnings
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional, cast
+
+from gmos.cli import main as cli_main
+from gmos.main import main as gui_main
 
 try:
     from gmos.io import sweep_orphan_gmos_temps
 except ImportError:
     # If this is run before gmos.io is fully available, handle gracefully
-    sweep_orphan_gmos_temps = None  # type: ignore[assignment]
+    sweep_orphan_gmos_temps = cast(Any, None)
     warnings.warn(
         "Could not import sweep_orphan_gmos_temps for cleanup.",
         RuntimeWarning,
@@ -37,14 +40,10 @@ except ImportError:
 def main(argv: Optional[List[str]] = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
 
-    # Startup Cleanup Call (Placed before main package import)
-    # This is the ideal placement: as early as possible in the execution flow.
     if sweep_orphan_gmos_temps is not None:
         try:
-            # Define the critical directories to scan for orphaned files
             work_dirs = [str(Path.cwd()), str(Path.home() / ".gmos")]
 
-            # Run the cleanup. Use the robust age threshold (5 minutes default)
             removed_count = sweep_orphan_gmos_temps(work_dirs, age_threshold=300.0)
 
             if removed_count > 0:
@@ -52,7 +51,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         except Exception as e:
             print(f"GMOS Cleanup Failed: {e}", file=sys.stderr)
-    # ----------------------------------------------------------- #
 
     try:
         package_main: Callable[[Optional[List[str]]], int]
@@ -82,4 +80,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if len(sys.argv) == 1:
+        sys.exit(gui_main())
+    first_arg = sys.argv[1]
+
+    # If it's a URL or the registration flag, send to GUI/Main entry
+    if "://" in first_arg or "--register-protocol" in first_arg:
+        sys.exit(gui_main())
+    # Otherwise, assume it's a CLI command (e.g., 'list', 'patch')
+    else:
+        cli_main()
+        sys.exit(0)

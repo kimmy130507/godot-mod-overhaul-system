@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
       - 'release/*'
   workflow_dispatch:
 
@@ -79,8 +80,8 @@ jobs:
       - name: Run headless E2E tests
         run: |
           if [[ "${{ runner.os }}" == "Linux" ]]; then
-            xvfb-run -a pytest tests/core/test_patcher_ops.py -q
+            xvfb-run -a pytest tests/ -q
           else
-            pytest tests/core/test_patcher_ops.py -q
+            pytest tests/ -q
           fi
         shell: bash

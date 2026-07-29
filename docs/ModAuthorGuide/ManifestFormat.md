@@ -39,6 +39,8 @@ Supported sections:
   * `[FileReplace]`
   * `[VariablePatch]`
   * `[FunctionPatch]`
+  * `[SmartPatch]`
+  * `[BinaryPatch]`
   * `[DataAdd]` (Convenience alias for VariablePatch `mode=create`)
 
 They may appear in any order.
@@ -61,7 +63,25 @@ res://scripts/player.gd = patches/player_override.gd
 **Left side:** target game file (res://)
 **Right side:** file inside your mod folder
 
-## 5. Validation
+## 5. Advanced Patching
+
+**SmartPatch**: Inject code into a function or variable without replacing the whole file.
+```ini
+[SmartPatch]
+; Inject at the end of the function (default)
+res://scripts/player.gd::_ready = patches/player_init_hook.gd
+
+; Inject at specific token anchor
+res://scripts/player.gd::update_health = patches/god_mode.gd ; anchor="health -= damage"
+```
+
+**BinaryPatch**: Apply a `bsdiff` binary delta (useful for large PCK or asset edits).
+```ini
+[BinaryPatch]
+res://art/player.tex = patches/player_skin.bin
+```
+
+## 6. Validation
 
 Common validation errors:
 

@@ -2,16 +2,18 @@
 
 This document explains how GMOS modifies the game’s engine configuration to install the security sandbox.
 
-# 1. Autoload Injection
+# 1. Autoload Injection (`project.godot` / `override.cfg`)
 
-GMOS modifies `project.godot` by adding a single entry to the `[autoload]` section. This registers the sandbox as a Global Singleton (Autoload), ensuring it is loaded before any other game scripts.
+GMOS registers the security sandbox as an engine-level Autoload singleton. It target `project.godot` for standard projects or falls back to `override.cfg` for binary builds.
 
 ### The Change
-GMOS appends or updates the following key:
+
+GMOS appends or updates the following entry under `[autoload]`:
 
 ```ini
 [autoload]
 GMOS_Sandbox="*res://gmos_sandbox.tscn"
+
 ```
 
   * **`GMOS_Sandbox`**: The global variable name available in GDScript.
@@ -24,7 +26,7 @@ This single line is sufficient to activate the security layer globally.
 
 The injection system writes two essential files to the game root:
 
-1.  **`gmos_sandbox.gd`**: The script containing the security logic (wrappers like `secure_execute`).
+1.  **`gmos_sandbox.gd`**: The script containing the security logic (wrappers like `secure_execute`) and the instruction to dynamically mount `gmos_override.pck` at startup.
 2.  **`gmos_sandbox.tscn`**: A minimal scene file that attaches the script to a Node.
 
 These files are written atomically using GMOS's IO safety wrappers.
@@ -33,7 +35,7 @@ These files are written atomically using GMOS's IO safety wrappers.
 
 The `SandboxInjector` class (`gmos/core/injection.py`) handles the process:
 
-1.  **Check**: Verifies if `project.godot` exists.
+1.  **Check**: Detects target config (`project.godot` or `override.cfg`).
 2.  **Load**: Parses `project.godot` into memory using `GodotProjectFile`.
 3.  **Verify**: Checks if `GMOS_Sandbox` is already present.
 4.  **Write Payload**: Creates the `.gd` and `.tscn` files.

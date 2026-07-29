@@ -19,7 +19,7 @@ For all primary source files:
 
 # GMOS - Godot Mod Overhaul System
 
-# Copyright (C) 2025 Kim
+# Copyright (C) 2025-2026 Kim
 
 #
 
@@ -57,4 +57,8 @@ These do **not** conflict with GPL-3.
 
 Mods built with GMOS are **not required** to be GPL-3.
 
-The runtime payload injected into the game is MIT-compatible GDScript, so modders may use any license.
+The runtime payload (the Sandbox Autoload and the `gmos_override.pck` package) dynamically injected into the game utilizes MIT-compatible GDScript and native engine archives, so modders may use any license for their specific mod files.
+
+# 5. EULA and Liability Disclaimer
+
+GMOS modifies game data and dynamically injects an override package (`gmos_override.pck`) and a Sandbox Autoload into the engine at runtime. These engine-level injections and file modifications may violate a game's End User License Agreement (EULA) or Terms of Service (ToS), potentially triggering anti-cheat mechanisms or account restrictions. GMOS is provided 'AS IS', without warranty of any kind. The authors are not liable for any damages, data loss, or account restrictions. You assume all responsibility for its use.

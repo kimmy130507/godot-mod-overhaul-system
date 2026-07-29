@@ -1,5 +1,5 @@
 # GMOS - Godot Mod Overhaul System
-# Copyright (C) 2025 Kim
+# Copyright (C) 2025-2026 Kim
 #
 # This file is part of GMOS.
 #
@@ -17,7 +17,6 @@
 # along with GMOS.  If not, see <https://www.gnu.org/licenses/>.
 """
 Primary package entrypoint and CLI/GUI launcher.
-Handles CLI vs. GUI, application lock, and contains all CLI-specific logic.
 """
 
 import argparse
@@ -32,15 +31,22 @@ from typing import Any, List, Optional, cast
 
 from gmos import utils
 from gmos.core.patcher import run_patcher, save_dryrun_artifact
+from gmos.core.protocol import register_url_handler, send_link_to_existing_instance
 from gmos.io import atomic_write_copy
 from gmos.utils import LOG_DIR, logger
 
 
 def _acquire_lock_or_report() -> bool:
+    """
+    Attempts to acquire the single-instance application lock.
+
+    Returns True if the lock was successfully acquired (primary instance).
+    Returns False if another instance is already running.
+    """
     try:
         from gmos.io.locking import acquire_app_lock
     except Exception:
-        acquire_app_lock = None  # type: ignore[assignment]
+        acquire_app_lock = cast(Any, None)
 
     got_lock = False
     max_attempts = 10
@@ -56,11 +62,8 @@ def _acquire_lock_or_report() -> bool:
 
         if got_lock:
             break
-        time.sleep(0.03 + (secrets.randbelow(1000) / 1000.0) * 0.12)
+        time.sleep(0.05 + (secrets.randbelow(100) / 1000.0))
     return got_lock
-
-
-# --- CLI Logic ---
 
 
 def _load_instructions_from_json(path: str) -> List[Any]:
@@ -77,15 +80,12 @@ def headless_dryrun(game_dir: str, instructions: List[Any]) -> Optional[str]:
     if not os.path.isdir(game_dir):
         raise FileNotFoundError(f"Game directory not found: {game_dir}")
 
-    # Create a temporary simulate work dir and run patcher
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_work_root = os.path.join(temp_dir, "sim_work")
         Path(temp_work_root).mkdir(parents=True, exist_ok=True)
-        # Suppress Pylance error due to un-typed `patch_plan` argument in gmos.patcher
         sim_log = run_patcher(temp_work_root, instructions)
 
-        # Save dryrun artifact to LOG_DIR
-        # Call the consolidated function from patcher
+        # Save dryrun artifact
         bundle = save_dryrun_artifact(
             sim_log,
             temp_work_root,
@@ -96,9 +96,8 @@ def headless_dryrun(game_dir: str, instructions: List[Any]) -> Optional[str]:
         return bundle
 
 
-# Custom Namespace for type hints on parsed arguments
 class HeadlessArgs(argparse.Namespace):
-    """Type-hinted container for _cli_main's arguments."""
+    """Typed arguments for _cli_main."""
 
     game_dir: str
     instructions: Optional[str]
@@ -106,6 +105,11 @@ class HeadlessArgs(argparse.Namespace):
 
 
 def _cli_main(argv: Optional[List[str]] = None) -> int:
+    """
+    Handles headless dry-run operations.
+    Parses CLI arguments specifically for the headless dry-run mode and saves
+    the generated support bundle artifact.
+    """
     p = argparse.ArgumentParser(description="GMOS headless dry-run")
     p.add_argument("--game-dir", "-g", required=True, help="Game directory to patch")
     p.add_argument(
@@ -117,13 +121,11 @@ def _cli_main(argv: Optional[List[str]] = None) -> int:
         required=False,
         help="Optional output path for created support bundle (.zip)",
     )
-    # Use custom namespace to provide type hints for args members
     args: HeadlessArgs = p.parse_args(argv, namespace=HeadlessArgs())
 
     instr: List[Any] = []
     if args.instructions:
         try:
-            # Use local function
             instr = _load_instructions_from_json(args.instructions)
         except Exception as e:
             logger.exception("Failed loading instructions file: %s", e)
@@ -133,7 +135,6 @@ def _cli_main(argv: Optional[List[str]] = None) -> int:
     try:
         bundle = headless_dryrun(args.game_dir, instr)
         if args.out and bundle:
-            # copy to requested path
             try:
                 atomic_write_copy(bundle, args.out)
                 print(args.out)
@@ -152,121 +153,65 @@ def _cli_main(argv: Optional[List[str]] = None) -> int:
         return 1
 
 
-# --- Main Application Entry ---
-
-
 def main(argv: Optional[List[str]] = None) -> int:
+    """
+    Primary application entrypoint.
+
+    Execution Flow:
+    1. Validates protocol registration (`--register-protocol`).
+    2. Parses incoming protocol links (`nxm://...`).
+    3. Acquires singleton lock (forwards payload to existing instance via IPC if locked).
+    4. Delegates to CLI headless mode or initializes the UI subsystem.
+    """
     argv = argv if argv is not None else sys.argv[1:]
+    # Check if we are being run just to register the protocol (Admin/UAC)
+    if "--register-protocol" in argv:
+        try:
+            idx = argv.index("--register-protocol")
+            proto = argv[idx + 1] if idx + 1 < len(argv) else "nxm"
+            register_url_handler(proto)
+            return 0
+        except Exception as e:
+            print(f"Registration failed: {e}", file=sys.stderr)
+            return 1
+
+    # Check if we were launched with a Protocol Link (nxm://...)
+    pending_link: Optional[str] = None
+    for arg in argv:
+        if "://" in arg:
+            pending_link = arg
+            break
     utils.set_windows_appid("com.kim.gmos")
+
+    # Check singleton lock and handle IPC
     got_lock = _acquire_lock_or_report()
     if not got_lock:
-        # CLI invocation -> nonzero exit; GUI -> show dialog if available
-        if argv:
-            print("Another GMOS instance is already running. Exiting.", file=sys.stderr)
-            return 2
-        try:
-            from tkinter import messagebox
+        # Secondary instance: Send link or focus command to primary
+        payload = pending_link if pending_link else "FOCUS"
+        send_link_to_existing_instance(payload)
+        # Exit silently
+        return 0
 
-            messagebox.showerror(
-                "Already Running",
-                "Another GMOS instance is already running. Close it and try again.",
-            )
-        except Exception:
-            print("Another GMOS instance is already running. Exiting.", file=sys.stderr)
-        return 2
-
-    # CLI mode when args present
-    if argv:
-        # Call local _cli_main
+    # CLI mode
+    if argv and not pending_link:
         return _cli_main(argv)
 
-    # GUI mode (no args)
-
+    # GUI Mode
     try:
-        from gmos.io.locking import wire_game_dir_locking
-        from gmos.state.config import ensure_config, get_config_path, load_config
-        from gmos.ui import App
+        from gmos.ui.app import App
 
-        # --- Proactive Setup Check (Run BEFORE App creation) ---
-        # This prevents the App from initializing with invalid defaults (like '.')
-        # and creating unnecessary folders in AppData.
-        config_path = get_config_path()
-        config = load_config(config_path)
-
-        game_dir_val = config.get("game_dir")
-
-        # ENHANCED VALIDATION: Check for actual game files (.pck, .exe, project.godot)
-        def _is_valid_game_dir(path: Any) -> bool:
-            if not path or not isinstance(path, str) or not os.path.isdir(path):
-                return False
-            try:
-                # Stop at first match
-                for f in os.listdir(path):
-                    if f.lower().endswith((".pck", ".exe")) or f == "project.godot":
-                        return True
-            except Exception:
-                pass
-            return False
-
-        is_valid = config and _is_valid_game_dir(game_dir_val)
-
-        if not is_valid:
-            logger.info("No valid config found. Running SetupWizard.")
-            # ensure_config will create a temporary Tk root if needed.
-            # We force setup because the existing config (if any) is invalid.
-            config = ensure_config(config_path, force_setup=True)
-
-            # Validate the result
-            new_game_dir_val = config.get("game_dir")
-            if not (config and _is_valid_game_dir(new_game_dir_val)):
-                # Failure/Cancel path: Exit immediately.
-                logger.warning(
-                    "Setup cancelled/invalid. Starting in manual configuration mode."
-                )
-
-        # Now create the main App window with a guaranteed valid config.
         app = App()
-
-        if wire_game_dir_locking is not None:
-            try:
-                wire_game_dir_locking(app)
-            except Exception as e:
-                # best-effort logging
-                try:
-                    logger.exception("Failed wiring game_dir locking: %s", e)
-                except Exception:
-                    import warnings
-
-                    warnings.warn(
-                        f"Failed wiring game_dir locking: {e}",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
-
-        if hasattr(app, "mainloop"):
-            app.mainloop()
-        elif hasattr(app, "run"):
-            app.run()  # type: ignore [reportUnknownMemberType, reportAttributeAccessIssue]
+        if pending_link:
+            app.after(500, lambda: app.handle_protocol_link(pending_link))
+        app.mainloop()
 
         return 0
     except Exception as e:
-        try:
-            logger.exception("GUI startup failed: %s", e)
-        except Exception:
-            import warnings
-
-            warnings.warn(
-                f"Logger unavailable when reporting GUI startup failure: {e}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+        logger.exception("GUI startup failed: %s", e)
         try:
             from tkinter import messagebox
 
-            messagebox.showerror(
-                "Startup Error",
-                f"Failed to start GUI. See log: {LOG_DIR}/gmos.log\n\n{e}",
-            )
+            messagebox.showerror("Startup Error", f"Failed to start GUI.\n\n{e}")
         except Exception:
-            print(f"Failed to start GUI: {e}", file=sys.stderr)
+            pass
         return 1
