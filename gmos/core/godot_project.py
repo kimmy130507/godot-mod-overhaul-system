@@ -1,5 +1,5 @@
 # GMOS - Godot Mod Overhaul System
-# Copyright (C) 2025 Kim
+# Copyright (C) 2025-2026 Kim
 #
 # This file is part of GMOS.
 #
@@ -17,8 +17,8 @@
 # along with GMOS.  If not, see <https://www.gnu.org/licenses/>.
 """
 Handles reading and writing of project.godot (ConfigParser-like syntax).
-Essential for Runtime Sandboxing and SDK features.
 """
+
 import os
 from typing import Dict, List, Optional
 
@@ -49,8 +49,6 @@ class GodotProjectFile:
         for i, line in enumerate(self.lines):
             sline = line.strip()
             if sline.startswith("[") and sline.endswith("]"):
-                # [application]
-                # [autoload]
                 sec = sline[1:-1]
                 self._sections[sec] = i
 
@@ -66,12 +64,12 @@ class GodotProjectFile:
         # Scan lines after section header until next section or EOF
         for i in range(start_idx + 1, len(self.lines)):
             line = self.lines[i].strip()
-            if line.startswith("["):  # Next section start
+            if line.startswith("["):
                 break
             if "=" in line:
                 k, v = line.split("=", 1)
                 if k.strip() == key:
-                    return v.strip().strip('"')  # Strip quotes for convenience
+                    return v.strip().strip('"')
         return None
 
     def set_value(self, section: str, key: str, value: str) -> None:
@@ -84,7 +82,6 @@ class GodotProjectFile:
 
         target_val = f'"{value}"' if " " in value or "/" in value else value
 
-        # 1. Try to find and replace existing key
         start_idx = self._sections.get(section)
         if start_idx is not None:
             for i in range(start_idx + 1, len(self.lines)):
@@ -105,7 +102,6 @@ class GodotProjectFile:
             self.lines.append(f"{key}={target_val}")
             return
 
-        # 2. Section missing, append new section
         if self.lines and self.lines[-1] != "":
             self.lines.append("")
         self.lines.append(f"[{section}]")
@@ -136,16 +132,44 @@ class GodotProjectFile:
         """Atomically save changes back to disk."""
         content = "\n".join(self.lines) + "\n"
         atomic_write_with_backup(self.path, content)
-        # Mark as re-loaded to force fresh read next time
         self.loaded = False
         logger.info("Saved Godot project config: %s", self.path)
 
     def get_entry_point(self) -> str:
-        """Helper to get the main scene (res://...)."""
-        # Godot 3/4 use application/run/main_scene usually,
-        # but it appears as run/main_scene under [application] in file
+        """Get the main scene (res://...)."""
         return self.get_value("application", "run/main_scene") or ""
 
     def set_entry_point(self, res_path: str) -> None:
         """Helper to set the main scene."""
         self.set_value("application", "run/main_scene", res_path)
+
+
+def validate_game_folder(path: str) -> bool:
+    """
+    Strict Mode: Returns True if the folder contains a Godot project or binary.
+    """
+    if not os.path.exists(path):
+        return False
+
+    # 1. Check for Project Config (Decompiled/Dev)
+    if os.path.exists(os.path.join(path, "project.godot")):
+        return True
+
+    # 2. Check for Godot Binary signatures
+    # Scan .exe files for "Godot" strings
+    for f in os.listdir(path):
+        if f.lower().endswith(".exe"):
+            try:
+                with open(os.path.join(path, f), "rb") as b:
+                    # Read header/first 2MB to find engine signature
+                    chunk = b.read(2 * 1024 * 1024)
+                    if (
+                        b"Godot Engine" in chunk
+                        or b"godot" in chunk.lower()
+                        or b"GDScript" in chunk
+                    ):
+                        return True
+            except Exception:
+                continue
+
+    return False

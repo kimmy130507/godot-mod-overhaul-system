@@ -2,31 +2,38 @@
 
 This document defines the JSON structures used by GMOS for configuration, state tracking, and data exchange.
 
-# 1. Configuration (`config.json`)
+# 1. Configuration
 
-**Location:** OS-specific user data folder (e.g., `%LOCALAPPDATA%/gmos/config.json`).
-**Purpose:** Stores global application settings.
+GMOS uses a **Two-Tier Configuration System**:
+
+### Tier 1: Global Registry (`global_registry.db`)
+
+**Location:** User Data folder (e.g., `%APPDATA%/gmos/global_registry.db`).
+**Format:** SQLite Database.
+**Purpose:** Tracks known game instances, the active theme, and the last accessed instance ID.
+
+### Tier 2: Instance Configuration (`instance.json`)
+**Location:** Inside each game's data folder: `<GameDir>/gmos_data/instance.json`.
+**Purpose:** Settings specific to that installation.
 
 ```json
 {
   "game_dir": "C:/Games/Brotato",
-  "mods_dir": "C:/Games/Brotato/mods",
+  "mods_dir": "C:/Games/Brotato/mods", 
   "game_executable": "Brotato.exe",
   "launch_override": "",
-  "legal_accepted": true
+  "last_played": "2025-11-23 12:00",
+  "mod_website": "",
+  "active_profile": "",
+  "executables": [],
+  "is_packed": false
 }
 ```
 
-| Key | Type | Description |
-| :--- | :--- | :--- |
-| `game_dir` | string | Path to the game root directory. |
-| `mods_dir` | string | Path to the `mods/` folder (usually inside `game_dir`). |
-| `legal_accepted` | bool | `true` if the user accepted the first-run disclaimer. |
-
 # 2. Policy (`user_load_order.json`)
 
-**Location:** Same folder as `config.json`.
-**Purpose:** Persists the user's load order, enabled mods, and conflict resolution rules.
+**Location:** Same folder as `instance.json`.
+**Purpose:** Persists the user's load order, enabled mods, and conflict resolution rules for a specific instance.
 
 ```json
 {
@@ -53,29 +60,34 @@ This document defines the JSON structures used by GMOS for configuration, state 
 
 # 3. Runtime Manifest (`runtime_manifest.json`)
 
-**Location:** `<GameDir>/runtime_manifest.json`.
+**Location:** `<GameDir>/gmos_data/runtime_manifest.json`.
 **Purpose:** Tracks the current state of the game directory to enable accurate rollbacks.
 
 ```json
 {
   "timestamp": "2025-11-23T12:00:00",
   "game_dir": "C:/Games/Brotato",
+  "target_pck": "gmos_override.pck",
   "modified_files": [
     "scripts/player.gd",
     "gmos_sandbox.gd",
     "project.godot"
   ],
+  "applied_ops_count": 1,
   "applied_ops": [
     {
       "mod": "CoreMod",
       "op": "VariablePatch",
-      "target": "res://scripts/player.gd::health"
+      "target": "res://scripts/player.gd::health",
+      "source": "patches/stats.gd::health",
+      "mode": "replace"
     }
   ]
 }
 ```
 
   * **`modified_files`**: A flat list of all files GMOS created or modified. The Revert logic iterates this list to restore `.bak` files.
+  * **`applied_ops_count`**: An integer tracking the total number of operations applied during the patch run.
   * **`applied_ops`**: An audit log of operations for debugging.
 
 # 4. Profile (`gmos_profile.json`)
@@ -89,6 +101,10 @@ This document defines the JSON structures used by GMOS for configuration, state 
   "gmos_version": "1.0.0",
   "timestamp_utc": "2025-11-23T12:00:00Z",
   "game_executable": "game.exe",
+  "description": "",
+  "isolation": {
+    "isolate_data": false
+  },
   "mods": [
     {
       "name": "ModA",

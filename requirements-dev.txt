@@ -1,10 +1,14 @@
 flake8
 pytest
 ruff
-isort
 black
 bandit
 pyinstaller
 hypothesis
 mypy
 pyfakefs
+requests
+bsdiff4
+types-requests
+pillow
+tkinterdnd2

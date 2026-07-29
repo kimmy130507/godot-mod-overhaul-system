@@ -19,50 +19,29 @@ bridge = GodotBridge(
     workspace_dir="C:/Games/MyGodotGame/gmos_workspace"
 )
 
-# IMPORTANT: You must configure the path to GDRE Tools for the decompilation step
-bridge.set_gdre_tools_path("C:/Tools/gdre_tools.exe")
 ```
 
-### 2. Extraction (`init_workspace`)
+### 2. Extraction & Decompilation (`init_workspace` / `recover_project`)
 
-This method uses GMOS's **internal pure-Python parser** to extract raw files from the game's `.pck` archive.
+These methods invoke the external **GDRE Tools** binary to extract and convert the raw assets back into an editable Godot project.
 
-  * **Function:** `bridge.init_workspace()`
-  * **What it does:**
-      * Locates the main PCK file in `game_dir`.
-      * Extracts all archived files to `workspace_dir` preserving directory structure.
-      * **Note:** This produces *raw* assets (e.g., `.gdc` scripts, `.stex` textures). These are not yet editable.
-
-<!-- end list -->
-
-```python
-# Extract raw files
-count = bridge.init_workspace()
-print(f"Extracted {count} files.")
-```
-
-### 3. Decompilation (`recover_project`)
-
-This method invokes the external **GDRE Tools** binary to convert the raw extracted assets back into an editable Godot project.
-
-  * **Function:** `bridge.recover_project()`
-  * **What it does:**
-      * Runs `gdre_tools --headless --recover ...` on the extracted data.
-      * Converts binary scripts (`.gdc`) back to source (`.gd`).
-      * Converts texture assets (`.stex`) back to standard images (`.png`).
-      * Reconstructs the `project.godot` file.
-
-<!-- end list -->
+* **Functions:** `bridge.init_workspace()` / `bridge.recover_project()`
+* **What they do:**
+    * Locates the main PCK file or executable in `game_dir`.
+    * Runs `gdre_tools --headless --recover` to extract and decompile scripts/textures.
+    * Reconstructs the `project.godot` file in the `workspace_dir`.
 
 ```python
 try:
-    logs = bridge.recover_project()
-    print("Decompilation complete! Project is now editable.")
+    # Executes extraction and decompilation simultaneously
+    log_count = bridge.init_workspace()
+    print(f"Decompilation complete! Generated {log_count} log entries. Project is now editable.")
 except Exception as e:
-    print(f"Failed to decompile: {e}")
+    print(f"Failed to initialize workspace: {e}")
+
 ```
 
-### 4. Editing (`launch_editor`)
+### 3. Editing (`launch_editor`)
 
 Once the workspace is recovered, use this method to open it in the Godot Editor.
 
@@ -73,7 +52,7 @@ Once the workspace is recovered, use this method to open it in the Godot Editor.
 bridge.launch_editor("C:/Godot/godot_v4.0.exe")
 ```
 
-### 5. Exporting (`generate_mod_patch`)
+### 4. Exporting (Build Preview)
 
 This is the "Brain" of the SDK. It compares your workspace against the original vanilla PCK to detect changes and generates a GMOS-compatible mod package.
 
@@ -83,15 +62,9 @@ This is the "Brain" of the SDK. It compares your workspace against the original 
     2.  **Smart Diffing:**
           * If a `.gd` script is modified, it attempts to detect if *only* a variable was changed.
           * **VariablePatch:** Generated if the diff isolates to a specific variable block.
+          * **FunctionPatch:** Generated if the diff isolates to a specific function block (uses CST analysis).
+          * **BinaryPatch:** Generated if a non-text file (e.g., texture, audio) has changed, creating a compact `bsdiff` delta instead of a full file copy.
           * **FileReplace:** Generated if complex logic changes are detected or heuristics fail.
     3.  **Packaging:** Copies modified files to `output_dir` and writes the `mod.mos` manifest.
 
-```python
-# Creates "MyCoolMod" inside "C:/Mods"
-manifest_path = bridge.generate_mod_patch(
-    output_dir="C:/Mods/MyCoolMod",
-    mod_name="My Cool Mod",
-    author="ModderName"
-)
-print(f"Mod exported to: {manifest_path}")
-```
+Once you click "Build Mod Package" in the Dev Tools UI, GMOS presents a Build Preview dialog, allowing you to review all patch instructions before exporting the final `.mos` manifest.

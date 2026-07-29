@@ -1,12 +1,22 @@
-# SPDX-FileCopyrightText: 2025 Kim
+# SPDX-FileCopyrightText: 2025-2026 Kim
 # SPDX-License-Identifier: GPL-3.0-or-later
-# For GDScript parsing logic tests.
+# GDScript Parsing Test Suite
+# Includes both Unit Tests (Deterministic) and Property-Based Fuzz Tests (Hypothesis)
+
 from importlib import import_module
 from typing import Optional, Sequence, Tuple
 
+import pytest
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
+
 from tests.data.gdscript_samples import SAMPLES
 
+# Import the module under test
 mod = import_module("gmos.core.patcher")
+# Access functions directly for fuzz tests
+get_var_block = mod.get_var_block
+get_function_block = mod.get_function_block
 
 
 def _extract_block(
@@ -14,27 +24,20 @@ def _extract_block(
     src: str,
     span: Optional[Tuple[int, int]],
 ) -> Optional[str]:
-    """
-    Helper to extract block text from returned span.
-    Handles both line-index and char-index spans.
-    """
+    """Helper to extract block text from returned span."""
     if span is None:
         return None
     start, end = span
-    # attempt line-index interpretation (exclusive)
     if 0 <= start < len(lines) and 0 <= end <= len(lines) and start < end:
         return "\n".join(lines[start:end])
-    # attempt line-index interpretation (inclusive)
     if 0 <= start < len(lines) and 0 <= end < len(lines) and start <= end:
         return "\n".join(lines[start : end + 1])
-    # attempt character-index interpretation
     if 0 <= start < len(src) and 0 <= end <= len(src) and start < end:
         return src[start:end]
     return None
 
 
 def _safe_call_get_var_block(src: str, var_name: str) -> Optional[Tuple[int, int]]:
-    """Helper to safely call get_var_block for data testing."""
     lines = src.splitlines()
     try:
         span: Optional[Tuple[int, int]] = mod.get_var_block(lines, var_name)
@@ -46,7 +49,6 @@ def _safe_call_get_var_block(src: str, var_name: str) -> Optional[Tuple[int, int
 def _safe_call_get_function_block(
     src: str, func_name: str
 ) -> Optional[Tuple[int, int]]:
-    """Helper to safely call get_function_block for data testing."""
     lines = src.splitlines()
     try:
         span: Optional[Tuple[int, int]] = mod.get_function_block(lines, func_name)
@@ -57,7 +59,7 @@ def _safe_call_get_function_block(
         ) from e
 
 
-# --- Test Parser Blocks ---
+# --- Unit Tests (Deterministic) ---
 
 
 def test_get_var_block_simple() -> None:
@@ -77,6 +79,7 @@ def test_get_function_block_edgecases() -> None:
 
     assert span1 is not None
     s1, e1 = span1
+    # Handle single line vs multi line return logic
     b1: Optional[str]
     if s1 > e1:
         s1, e1 = e1, s1
@@ -86,7 +89,7 @@ def test_get_function_block_edgecases() -> None:
         b1 = _extract_block(lines, src, (s1, e1))
 
     assert b1 is not None and "foo" in b1
-    # multi-line functions should return a valid block
+
     assert span2 is not None
     s2, e2 = span2
     b2: Optional[str]
@@ -99,25 +102,108 @@ def test_get_function_block_edgecases() -> None:
     assert ("bar" in b2) or ("print" in b2)
 
 
-# --- Test Parser data ---
-
-
 def test_parser_data_basic() -> None:
     for src, expect in SAMPLES:
-        # test variables
         for v in expect.get("var", []):
             span = _safe_call_get_var_block(src, v)
-            assert (
-                span is not None
-            ), f"var {v} not found or span None in sample: {src!r}"
+            assert span is not None, f"var {v} not found in sample: {src!r}"
         for c in expect.get("const", []):
             span = _safe_call_get_var_block(src, c)
-            assert (
-                span is not None
-            ), f"const {c} not found or span None in sample: {src!r}"
-        # test functions
+            assert span is not None, f"const {c} not found in sample: {src!r}"
         for f in expect.get("func", []):
             span = _safe_call_get_function_block(src, f)
-            assert (
-                span is not None
-            ), f"func {f} not found or span None in sample: {src!r}"
+            assert span is not None, f"func {f} not found in sample: {src!r}"
+
+
+# --- Fuzz Tests (Hypothesis) ---
+
+# Generate simple identifiers (var names)
+identifiers = st.from_regex(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", fullmatch=True)
+
+# Generate random lines of code
+code_lines = st.text(
+    alphabet=st.characters(blacklist_categories=("Cc", "Cs")), min_size=0, max_size=100
+)
+
+
+def balanced_braces() -> st.SearchStrategy[str]:
+    return st.recursive(
+        st.text(alphabet="abcdefg 12345"),
+        lambda children: st.one_of(
+            st.builds(lambda s: f"{{{s}}}", children),  # type: ignore
+            st.builds(lambda s: f"[{s}]", children),  # type: ignore
+            st.builds(lambda s: f"({s})", children),  # type: ignore
+        ),
+        max_leaves=5,
+    )
+
+
+@given(var_name=identifiers, val=st.text(alphabet=st.characters(blacklist_categories=("Cc", "Cs")), min_size=1).map(lambda s: s.replace("\n", " ")))  # type: ignore[misc]
+def test_get_var_block_fuzz_crash_safe(var_name: str, val: str) -> None:
+    """Property: get_var_block should never crash on random input lines."""
+    lines = [
+        f"# random comment {val}",
+        f"var {var_name} = {val}",
+        "func some_other_stuff():",
+        "    pass",
+    ]
+
+    try:
+        result = get_var_block(lines, var_name)
+    except Exception as e:
+        pytest.fail(f"get_var_block crashed on valid-ish input: {e}")
+
+    if result:
+        start, end = result
+        assert 0 <= start < len(lines)
+        assert start <= end < len(lines)
+        assert f"var {var_name}" in lines[start] or f"const {var_name}" in lines[start]
+
+
+@given(code=st.lists(code_lines, min_size=1, max_size=50), target=identifiers)  # type: ignore[misc]
+def test_get_var_block_fuzz_random_noise(code: list[str], target: str) -> None:
+    """Property: Feeding complete garbage lines should not crash the parser."""
+    try:
+        get_var_block(code, target)
+    except Exception as e:
+        pytest.fail(f"Parser crashed on noise: {e}")
+
+
+@settings(max_examples=200)  # type: ignore[misc]
+@given(func_name=identifiers, body=st.lists(st.text(alphabet=st.characters(blacklist_categories=("Cc", "Cs")), min_size=1).map(lambda s: s.replace("\n", " ")), min_size=1, max_size=10))  # type: ignore[misc]
+def test_get_function_block_structure(func_name: str, body: list[str]) -> None:
+    """Property: A correctly formatted function must be detected."""
+    lines = [f"func {func_name}():"]
+    lines.extend([f"    {line}" for line in body])
+    lines.append("func next_function():")
+    lines.append("    pass")
+
+    result = get_function_block(lines, func_name)
+
+    assert result is not None, f"Failed to find generated function {func_name}"
+    start, end = result
+
+    detected_body = lines[start : end + 1]
+    # Filter logic: Parser strips trailing empty lines/comments.
+    cutoff = len(body) - 1
+    while cutoff >= 0:
+        line = f"    {body[cutoff]}"
+        if not line.strip() or line.strip().startswith("#"):
+            cutoff -= 1
+        else:
+            break
+    significant_lines = cutoff + 1
+    assert len(detected_body) >= significant_lines
+
+
+@given(nested=balanced_braces())  # type: ignore[misc]
+def test_get_var_block_nested_braces(nested: str) -> None:
+    """Property: Parser handles nested braces in variable assignment."""
+    assume(nested.strip())
+    lines = ["var complex_data = (", f"    {nested}", ")", "var next_one = 1"]
+
+    result = get_var_block(lines, "complex_data")
+    if result:
+        start, end = result
+        block_content = "".join(lines[start : end + 1])
+        assert nested in block_content, "Parser cut off nested structure"

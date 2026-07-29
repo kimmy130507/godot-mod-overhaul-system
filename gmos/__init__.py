@@ -1,5 +1,5 @@
 # GMOS - Godot Mod Overhaul System
-# Copyright (C) 2025 Kim
+# Copyright (C) 2025-2026 Kim
 #
 # This file is part of GMOS.
 #
@@ -15,27 +15,20 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with GMOS.  If not, see <https://www.gnu.org/licenses/>.
-"""
-GMOS Package Bootstrap
-Exposes the Five Pillars: core, io, state, ui, utils.
-"""
 from typing import TYPE_CHECKING, Any
 
-# Statically import the logic pillars (safe for CLI/Headless)
 from gmos import core, io, state, utils
 
-# Lazy-import the UI pillar to avoid initializing Tkinter
-# unless explicitly requested or accessed.
 if TYPE_CHECKING:
-    from gmos import ui
+    from gmos.ui import app
 
-__all__ = ["core", "io", "state", "ui", "utils"]
+__all__ = ["core", "io", "state", "app", "utils"]
 
 
 def __getattr__(name: str) -> Any:
     """Lazy import for gmos.ui to preserve CLI startup speed."""
     if name == "ui":
-        from gmos import ui
+        from gmos.ui import app
 
-        return ui
+        return app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

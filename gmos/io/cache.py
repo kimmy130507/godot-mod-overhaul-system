@@ -1,5 +1,5 @@
 # GMOS - Godot Mod Overhaul System
-# Copyright (C) 2025 Kim
+# Copyright (C) 2025-2026 Kim
 #
 # This file is part of GMOS.
 #
@@ -17,46 +17,60 @@
 # along with GMOS.  If not, see <https://www.gnu.org/licenses/>.
 """
 Cache Module: Manages Godot's internal asset cache (.import folder).
-Handles detection of Godot version and safe purging of stale import artifacts.
 """
 
 import os
 
 from gmos.io import safe_rmtree
+from gmos.io.pck import get_main_pck_path, read_pck_header
 from gmos.utils import logger
 
 
 def detect_godot_version(game_dir: str) -> int:
     """
-    Heuristic to detect Godot major version from project.godot.
-    Returns 3 or 4. Defaults to 3 if uncertain.
+    Detects Godot major version by checking the main PCK header or project.godot.
+    Returns 3 or 4. Defaults to 0 if uncertain.
     """
+    # 1. Inspect PCK header directly for compiled games
+    try:
+        pck_path = get_main_pck_path(game_dir)
+        if pck_path:
+            header = read_pck_header(pck_path)
+            if header.major in (3, 4):
+                return header.major
+    except Exception:
+        pass
+
+    # 2. Check loose project.godot (Decompiled / Dev setups)
     proj_path = os.path.join(game_dir, "project.godot")
     if not os.path.exists(proj_path):
         # Fallback: check for .godot folder (G4 feature)
         if os.path.isdir(os.path.join(game_dir, ".godot")):
             return 4
-        return 3
+        return 0
 
     try:
         with open(proj_path, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
+                line = line.strip()
                 # Godot 4 usually has config_version=5
-                if line.startswith("config_version="):
+                if line.startswith("config_version") and "=" in line:
                     try:
-                        ver = int(line.split("=")[1].strip())
+                        ver = int(line.split("=", 1)[1].strip())
                         if ver >= 5:
                             return 4
+                        if ver in (3, 4):
+                            return 3
                     except ValueError:
                         pass
     except Exception:
         pass
 
-    return 3
+    return 0
 
 
 def get_cache_path(game_dir: str) -> str:
-    """Returns the absolute path to the import cache directory."""
+    """Returns the path to the import cache directory."""
     ver = detect_godot_version(game_dir)
     if ver >= 4:
         return os.path.join(game_dir, ".godot", "imported")
@@ -65,10 +79,17 @@ def get_cache_path(game_dir: str) -> str:
 
 def purge_cache(game_dir: str) -> int:
     """
-    Completely removes the asset cache directory.
-    Forces Godot to re-import all assets on next launch.
-    Returns number of files removed (rough estimate).
+    Completely removes the asset cache directory, forcing a re-import.
+    Only proceeds if 'project.godot' exists; otherwise raises PermissionError
+    to prevent corruption of runtime-only game builds.
+    Returns number of files removed.
     """
+    if not os.path.exists(os.path.join(game_dir, "project.godot")):
+        raise PermissionError(
+            "'project.godot' not found.\n"
+            "This appears to be a compiled runtime game, which cannot "
+            "rebuild asset caches. Deleting these files will break the game."
+        )
     cache_dir = get_cache_path(game_dir)
     if not os.path.exists(cache_dir):
         logger.info("Cache purge: Directory not found: %s", cache_dir)
@@ -76,14 +97,14 @@ def purge_cache(game_dir: str) -> int:
 
     count = 0
     try:
-        # Count files for reporting
+        # Count files
         for _, _, files in os.walk(cache_dir):
             count += len(files)
 
         logger.info("Purging cache dir: %s (%d files)", cache_dir, count)
         safe_rmtree(cache_dir)
 
-        # Re-create empty dir structure to be polite (though Godot will do it)
+        # Re-create empty dir structure
         if detect_godot_version(game_dir) >= 4:
             os.makedirs(cache_dir, exist_ok=True)
 
@@ -96,25 +117,11 @@ def purge_cache(game_dir: str) -> int:
 
 def clean_stale_imports(game_dir: str) -> int:
     """
-    Surgical cleanup: Removes .import files for assets that no longer exist.
-    Useful for Godot 3 where .import files sit alongside assets,
-    or the global .import folder retains orphans.
+    Removes .import files for assets that no longer exist.
     """
-    # This implementation focuses on the global .import folder cleanup
-    # which is the most common cause of "ghost asset" issues.
-
     cache_dir = get_cache_path(game_dir)
     if not os.path.isdir(cache_dir):
         return 0
 
-    removed_count = 0
-    # This is a complex operation because mapping hash->file is hard without reading
-    # every .import file. For v1, we stick to the safer "Purge" which fixes all issues.
-    # A true stale cleaner requires parsing binary MD5 maps.
-
-    # Placeholder for future expansion:
-    # 1. Read all *.import files in game_dir (source side)
-    # 2. Cross reference with cache_dir
-    # 3. Delete orphans
-
-    return removed_count
+    # TODO: Cross-reference .import hashes with active VFS to remove stale assets
+    return 0

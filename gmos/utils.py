@@ -1,5 +1,5 @@
 # GMOS - Godot Mod Overhaul System
-# Copyright (C) 2025 Kim
+# Copyright (C) 2025-2026 Kim
 #
 # This file is part of GMOS.
 #
@@ -17,6 +17,7 @@
 # along with GMOS.  If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import random
@@ -28,9 +29,10 @@ import threading
 import time
 import tkinter as tk
 import types
+from ctypes import wintypes
 from logging.handlers import RotatingFileHandler
 from subprocess import CompletedProcess
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 from typing import (
     Any,
     Callable,
@@ -40,11 +42,101 @@ from typing import (
     Sequence,
     Tuple,
     TypedDict,
+    TypeVar,
     Union,
     cast,
 )
 
-# --- Shared Types & Helpers ---
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = cast(Any, None)
+    ImageTk = cast(Any, None)
+
+
+def extract_icon_from_exe(exe_path: str) -> Optional[Any]:
+    """
+    Extracts the first icon from a Windows Executable (.exe) as a PIL Image.
+    Returns None if on non-Windows, file not found, or PIL missing.
+    """
+    if not sys.platform.startswith("win") or not Image:
+        return None
+
+    try:
+        # Windows API Constants & Functions
+        windll = cast(Any, ctypes).windll
+        shell32 = windll.shell32
+        user32 = windll.user32
+        gdi32 = windll.gdi32
+
+        # Extract Icon Handle
+        large_icons = (wintypes.HICON * 1)()
+        small_icons = (wintypes.HICON * 1)()
+
+        count = shell32.ExtractIconExW(exe_path, 0, large_icons, small_icons, 1)
+        if count == 0 or not large_icons[0]:
+            return None
+
+        hIcon = large_icons[0]
+
+        # Create a Device Context (DC)
+        hdc_screen = user32.GetDC(0)
+        hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+
+        # Create a 32-bit Bitmap
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize", wintypes.DWORD),
+                ("biWidth", wintypes.LONG),
+                ("biHeight", wintypes.LONG),
+                ("biPlanes", wintypes.WORD),
+                ("biBitCount", wintypes.WORD),
+                ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD),
+                ("biXPelsPerMeter", wintypes.LONG),
+                ("biYPelsPerMeter", wintypes.LONG),
+                ("biClrUsed", wintypes.DWORD),
+                ("biClrImportant", wintypes.DWORD),
+            ]
+
+        bmi = BITMAPINFOHEADER()
+        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.biWidth = 32
+        bmi.biHeight = 32
+        bmi.biPlanes = 1
+        bmi.biBitCount = 32
+        bmi.biCompression = 0  # BI_RGB
+
+        bits_ptr = ctypes.c_void_p()
+
+        hBitmap = gdi32.CreateDIBSection(
+            hdc_mem, ctypes.byref(bmi), 0, ctypes.byref(bits_ptr), 0, 0
+        )
+
+        # Select object and draw
+        old_obj = gdi32.SelectObject(hdc_mem, hBitmap)
+        user32.DrawIconEx(hdc_mem, 0, 0, hIcon, 32, 32, 0, 0, 3)  # DI_NORMAL
+
+        # Create buffer copy for PIL
+        size = 32 * 32 * 4
+        buf = (ctypes.c_char * size).from_address(bits_ptr.value or 0)
+        raw_data = bytes(buf)
+
+        # Cleanup
+        gdi32.SelectObject(hdc_mem, old_obj)
+        gdi32.DeleteObject(hBitmap)
+        gdi32.DeleteDC(hdc_mem)
+        user32.ReleaseDC(0, hdc_screen)
+        user32.DestroyIcon(hIcon)
+        if small_icons[0]:
+            user32.DestroyIcon(small_icons[0])
+        # Load into PIL (Windows Bitmap is BGRA)
+        img = Image.frombuffer("RGBA", (32, 32), raw_data, "raw", "BGRA", 0, -1)
+        return img
+
+    except Exception as e:
+        logger.debug(f"Icon extraction failed: {e}")
+        return None
 
 
 class ModConfig(TypedDict, total=False):
@@ -57,7 +149,7 @@ class ModConfig(TypedDict, total=False):
     _resolved_order_rank: int
 
 
-def _get_mod_name_from_config(mod_config: ModConfig) -> str:
+def get_mod_name_from_config(mod_config: ModConfig) -> str:
     """Determine mod name. Prefer Metadata 'Name' then folder basename."""
     # Trust the parser to populate 'Name' in the root.
     top_name = mod_config.get("Name")
@@ -69,7 +161,6 @@ def _get_mod_name_from_config(mod_config: ModConfig) -> str:
     return os.path.basename(path) or path
 
 
-# Logging: defer filesystem operations/handler creation until runtime.
 ROOT_DIR = os.path.abspath(os.path.dirname(__file__))
 APPDATA_BASE = os.environ.get("APPDATA") or os.path.expanduser(
     os.path.join("~", ".local", "share")
@@ -77,17 +168,15 @@ APPDATA_BASE = os.environ.get("APPDATA") or os.path.expanduser(
 LOG_DIR = os.path.join(APPDATA_BASE, "gmos", "logs")
 LOCK_PATH = os.path.join(LOG_DIR, "gmos.lock")
 
-# Module-level logger instance. Handlers are attached by configure_logging().
 logger = logging.getLogger("gmos")
 logger.setLevel(logging.WARNING)  # WARNING, INFO, DEBUG
 
-_LOGGER_CONFIGURED = False
+_logger_configured = False
 _ensure_log_dir_lock = threading.Lock()
 
 
 def ensure_log_dir_exists() -> None:
-    """Create LOG_DIR if needed. Thread-safe and best-effort; errors are logged."""
-    # Fast-path: if it already exists, avoid acquiring the lock.
+    """Create LOG_DIR if needed."""
     if os.path.isdir(LOG_DIR):
         return
     # Use a process-wide lock to avoid races in multi-threaded startup.
@@ -105,11 +194,11 @@ def configure_logging(log_dir: Optional[str] = None, level: int = logging.INFO) 
     """Configure file handler and console handler once.
     Call early in main() or UI bootstrap.
     """
-    global _LOGGER_CONFIGURED, LOG_DIR
-    if _LOGGER_CONFIGURED:
+    global _logger_configured
+    if _logger_configured:
         return
     if log_dir:
-        LOG_DIR = log_dir  # type: ignore[reportConstantRedefinition]
+        globals()["LOG_DIR"] = log_dir
     ensure_log_dir_exists()
     try:
         fh_path = os.path.join(LOG_DIR, "gmos.log")
@@ -124,7 +213,7 @@ def configure_logging(log_dir: Optional[str] = None, level: int = logging.INFO) 
             "Failed to create file handler for LOG_DIR=%s", LOG_DIR, exc_info=True
         )
     logger.propagate = False
-    _LOGGER_CONFIGURED = True  # type: ignore[reportConstantRedefinition]
+    _logger_configured = True
 
 
 def get_logger() -> logging.Logger:
@@ -164,9 +253,7 @@ def set_windows_appid(appid: str = "com.kim.gmos") -> None:
     if not sys.platform.startswith("win"):
         return
     try:
-        import ctypes
-
-        cast(Any, ctypes.windll).shell32.SetCurrentProcessExplicitAppUserModelID(appid)  # type: ignore[attr-defined]
+        cast(Any, ctypes).windll.shell32.SetCurrentProcessExplicitAppUserModelID(appid)
     except Exception:
         logger.debug("Failed to set AppUserModelID", exc_info=True)
 
@@ -180,10 +267,10 @@ def load_and_apply_app_icon(root: tk.Tk) -> Optional[tk.PhotoImage]:
             ico = resource_path(os.path.join("assets", "gmos.ico"))
             if os.path.exists(ico):
                 try:
-                    root.iconbitmap(ico)  # type: ignore[call-arg, attr-defined]
+                    cast(Any, root).iconbitmap(ico)
                 except Exception:
                     # alternate signature for some tk versions
-                    root.iconbitmap(default=ico)  # type: ignore[call-arg, attr-defined]
+                    cast(Any, root).iconbitmap(default=ico)
                 logger.debug("Applied .ico to root: %s", ico)
                 return None
             logger.debug("ICO not found at %s", ico)
@@ -199,10 +286,11 @@ def load_and_apply_app_icon(root: tk.Tk) -> Optional[tk.PhotoImage]:
             if os.path.exists(png):
                 _app_icon_img = tk.PhotoImage(file=png)
                 try:
-                    root.tk.call("wm", "iconphoto", root._w, _app_icon_img)  # type: ignore[attr-defined]
+                    root_any = cast(Any, root)
+                    root_any.tk.call("wm", "iconphoto", root_any._w, _app_icon_img)
                 except Exception:
                     try:
-                        root.iconphoto(False, _app_icon_img)
+                        cast(Any, root).iconphoto(False, _app_icon_img)
                     except Exception:
                         logger.debug("Failed to apply iconphoto to root", exc_info=True)
                 logger.debug("Applied .png to root: %s", png)
@@ -223,9 +311,9 @@ def load_and_apply_app_icon_to_toplevel(top: tk.Toplevel) -> None:
             ico = resource_path(os.path.join("assets", "gmos.ico"))
             if os.path.exists(ico):
                 try:
-                    top.iconbitmap(ico)  # type: ignore[reportUnknownMemberType]
+                    cast(Any, top).iconbitmap(ico)
                 except Exception:
-                    top.iconbitmap(default=ico)  # type: ignore[reportUnknownMemberType]
+                    cast(Any, top).iconbitmap(default=ico)
                 return
 
         # 2. Non-Windows (Linux/Mac): Inherit from master or use cached PNG
@@ -239,14 +327,328 @@ def load_and_apply_app_icon_to_toplevel(top: tk.Toplevel) -> None:
             except Exception:
                 # Fallback standard call
                 try:
-                    top.iconphoto(False, _app_icon_img)
+                    cast(Any, top).iconphoto(False, _app_icon_img)
                 except Exception:
                     pass
     except Exception:
         logger.debug("Failed to apply Toplevel icon", exc_info=True)
 
 
-# --- Uncaught Exception Hook ---
+_active_icon_set: Optional[str] = None
+
+
+def set_active_icon_set(set_name: str) -> None:
+    """Sets the global icon set used by load_icon (e.g. 'Nexus', 'Default')."""
+    global _active_icon_set
+    if set_name and set_name.lower() != "default":
+        _active_icon_set = set_name
+    else:
+        _active_icon_set = None
+
+
+def get_available_icon_sets() -> List[str]:
+    """Scans assets/icons/themes/ for available icon sets."""
+    sets = ["Default"]
+    try:
+        themes_dir = resource_path(os.path.join("assets", "icons", "themes"))
+        if os.path.isdir(themes_dir):
+            for name in os.listdir(themes_dir):
+                if os.path.isdir(os.path.join(themes_dir, name)):
+                    sets.append(name)
+    except Exception:
+        pass
+    return sorted(set(sets))
+
+
+def detect_icon_theme() -> str:
+    """
+    Returns 'light' (for dark backgrounds) or 'dark' (for light backgrounds).
+    """
+    try:
+        style = ttk.Style()
+        bg = style.lookup("TFrame", "background")
+        # If text is White, background is Dark -> We need LIGHT icons
+        if get_binary_contrast_color(str(bg)) == "#FFFFFF":
+            return "light"
+        return "dark"
+    except Exception:
+        return "dark"
+
+
+def load_icon(
+    name: str,
+    theme: Optional[str] = None,
+    size: Optional[Tuple[int, int]] = (24, 24),
+    force_color_variant: Optional[str] = None,
+) -> Optional[Any]:
+    """
+    Robustly loads an icon from assets/icons/{name}.
+    'theme' is the primary theme name (e.g., 'nexus').
+
+    Checks the following paths in order, respecting the light/dark color variant:
+    0. Global Active Set (if 'theme' arg is None)
+    1. Custom Theme + Color Variant
+    2. Custom Theme Default
+    3. App Default + Color Variant
+    4. Absolute Default
+    """
+    try:
+        if not theme:
+            theme = _active_icon_set
+        color_variant = force_color_variant or detect_icon_theme()
+
+        if theme:
+            path = resource_path(
+                os.path.join("assets", "icons", "themes", theme, color_variant, name)
+            )
+            if os.path.exists(path):
+                return _load_image_file(path, size)
+
+        if theme:
+            path = resource_path(os.path.join("assets", "icons", "themes", theme, name))
+            if os.path.exists(path):
+                return _load_image_file(path, size)
+
+        path = resource_path(
+            os.path.join("assets", "icons", "default", color_variant, name)
+        )
+        if os.path.exists(path):
+            return _load_image_file(path, size)
+
+        path = resource_path(os.path.join("assets", "icons", "default", name))
+        if os.path.exists(path):
+            return _load_image_file(path, size)
+
+    except Exception:
+        return None
+    return None
+
+
+def _load_image_file(path: str, size: Optional[Tuple[int, int]]) -> Any:
+    if Image and ImageTk and size:
+        img = (
+            cast(Any, Image)
+            .open(path)
+            .resize(size, cast(Any, Image).Resampling.LANCZOS)
+        )
+        return cast(Any, ImageTk).PhotoImage(img)
+    return tk.PhotoImage(file=path)
+
+
+# Pre-calculate APCA luminance coefficients
+# Coefficients: Rec. 709 (0.2126729, 0.7151522, 0.0721750)
+_APCA_R = tuple(0.2126729 * ((i / 255.0) ** 2.4) for i in range(256))
+_APCA_G = tuple(0.7151522 * ((i / 255.0) ** 2.4) for i in range(256))
+_APCA_B = tuple(0.0721750 * ((i / 255.0) ** 2.4) for i in range(256))
+
+# APCA "Soft Clamp" threshold
+_BLK_THRS = 0.022
+_BLK_CLAMP = 1.414
+
+
+def get_binary_contrast_color(hex_color: str) -> str:
+    """
+    Determines the best text color (Black or White) using the full
+    WCAG 3.0 APCA (SAPC-717) contrast algorithm.
+    """
+    if not hex_color:
+        return "#000000"
+
+    clean_hex = hex_color[1:] if hex_color.startswith("#") else hex_color
+
+    try:
+        rgb_int = int(clean_hex, 16)
+
+        # Extract RGB components
+        if len(clean_hex) == 6:
+            r = (rgb_int >> 16) & 0xFF
+            g = (rgb_int >> 8) & 0xFF
+            b = rgb_int & 0xFF
+        elif len(clean_hex) == 3:
+            r = ((rgb_int >> 8) & 0xF) * 17
+            g = ((rgb_int >> 4) & 0xF) * 17
+            b = (rgb_int & 0xF) * 17
+        else:
+            return "#000000"
+
+        # Calculate Estimated Screen Luminance (Ys)
+        y_bg = _APCA_R[r] + _APCA_G[g] + _APCA_B[b]
+
+        # Luminance for Black (0.0) and White (1.0)
+        y_black = 0.0
+        y_white = 1.0
+
+        # Calculate Contrast Score (Lc) for Black Text
+        y_black_clamped = y_black + (_BLK_THRS - y_black) ** _BLK_CLAMP
+
+        y_bg_clamped_for_black = y_bg
+        if y_bg < _BLK_THRS:
+            y_bg_clamped_for_black += (_BLK_THRS - y_bg) ** _BLK_CLAMP
+
+        lc_black = (y_bg_clamped_for_black**0.56) - (y_black_clamped**0.57)
+
+        # Calculate Contrast Score (Lc) for White Text
+        y_bg_clamped_for_white = y_bg
+        if y_bg < _BLK_THRS:
+            y_bg_clamped_for_white += (_BLK_THRS - y_bg) ** _BLK_CLAMP
+
+        lc_white = (y_white**0.62) - (y_bg_clamped_for_white**0.65)
+
+        return "#000000" if lc_black > lc_white else "#FFFFFF"
+
+    except (ValueError, IndexError):
+        return "#000000"
+
+
+def get_adaptive_color_variant(
+    bg_hex: str, light_variant: str, dark_variant: str
+) -> str:
+    """
+    Returns the light_variant if the background is DARK, and dark_variant if the background is LIGHT.
+    Used for keeping colored text (Green/Red) readable on any theme.
+
+    Args:
+        bg_hex: The background color.
+        light_variant: Bright color for dark backgrounds (e.g. Neon Green #00e676)
+        dark_variant: Dark color for light backgrounds (e.g. Forest Green #2e7d32)
+    """
+    # If the background needs WHITE text, it is Dark -> Use the Bright/Light Variant
+    if get_binary_contrast_color(bg_hex) == "#FFFFFF":
+        return light_variant
+    return dark_variant
+
+
+def get_dynamic_text_color(bg_hex: Optional[str] = None) -> str:
+    """
+    Calculates a dynamic grayscale text color based on the background's luminance,
+    scaling between black and white for optimal contrast.
+    """
+    if not bg_hex:
+        try:
+            style = ttk.Style()
+            bg_hex = str(style.lookup("TFrame", "background") or "#333333")
+        except Exception:
+            bg_hex = "#333333"
+
+    clean_hex = bg_hex[1:] if bg_hex.startswith("#") else bg_hex
+    try:
+        rgb_int = int(clean_hex, 16)
+        if len(clean_hex) == 6:
+            r = (rgb_int >> 16) & 0xFF
+            g = (rgb_int >> 8) & 0xFF
+            b = rgb_int & 0xFF
+        elif len(clean_hex) == 3:
+            r = ((rgb_int >> 8) & 0xF) * 17
+            g = ((rgb_int >> 4) & 0xF) * 17
+            b = (rgb_int & 0xF) * 17
+        else:
+            return "#000000"
+
+        y_bg = _APCA_R[r] + _APCA_G[g] + _APCA_B[b]
+
+        val = int(230 - (y_bg * 205))
+        val = max(25, min(230, val))
+
+        return f"#{val:02x}{val:02x}{val:02x}"
+    except (ValueError, IndexError):
+        return "#000000"
+
+
+def apply_window_theme(window: tk.Wm) -> None:
+    """
+    Forces the Windows 10/11 title bar to use the immersive dark mode
+    and matches the exact background color of the ttkbootstrap theme.
+    """
+    if sys.platform == "win32":
+        try:
+            # Get Theme Colors
+            style = ttk.Style()
+            bg_hex = str(style.lookup("TFrame", "background"))
+            fg_hex = str(style.lookup("TLabel", "foreground"))
+            # Check if current UI theme is dark
+            # (If icons are 'light', the background is dark)
+            is_dark_mode = detect_icon_theme() == "light"
+            # Setup DWM Constants
+            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            DWMWA_CAPTION_COLOR = 35
+            DWMWA_TEXT_COLOR = 36
+            set_window_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+            get_parent = ctypes.windll.user32.GetParent
+
+            hwnd = get_parent(cast(Any, window).winfo_id())
+            if hwnd == 0:
+                hwnd = cast(Any, window).winfo_id()
+
+            # Apply Dark Mode Preference
+            mode_val = ctypes.c_int(1 if is_dark_mode else 0)
+            if (
+                set_window_attribute(
+                    hwnd,
+                    DWMWA_USE_IMMERSIVE_DARK_MODE,
+                    ctypes.byref(mode_val),
+                    ctypes.sizeof(mode_val),
+                )
+                != 0
+            ):
+                # Fallback for older Win10 builds (Attribute 19)
+                set_window_attribute(
+                    hwnd, 19, ctypes.byref(mode_val), ctypes.sizeof(mode_val)
+                )
+
+            # Apply Exact Background Color (Windows 11+)
+            # Windows expects COLORREF (0x00BBGGRR), not RGB. We must swap R and B.
+            def hex_to_colorref(h: str) -> int:
+                h = h.lstrip("#")
+                r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+                return (b << 16) | (g << 8) | r
+
+            if bg_hex and len(bg_hex) == 7:
+                color_val = ctypes.c_int(hex_to_colorref(bg_hex))
+                set_window_attribute(
+                    hwnd,
+                    DWMWA_CAPTION_COLOR,
+                    ctypes.byref(color_val),
+                    ctypes.sizeof(color_val),
+                )
+
+            # Match Title Text Color
+            if fg_hex and len(fg_hex) == 7:
+                text_val = ctypes.c_int(hex_to_colorref(fg_hex))
+                set_window_attribute(
+                    hwnd,
+                    DWMWA_TEXT_COLOR,
+                    ctypes.byref(text_val),
+                    ctypes.sizeof(text_val),
+                )
+        except Exception:
+            pass
+
+
+def setup_child_window(
+    window: tk.Toplevel, parent: tk.Misc, width: int, height: int, modal: bool = True
+) -> None:
+    """
+    Configures a child window with consistent styling and behavior.
+    """
+    # Apply Theme
+    window.after(100, lambda: apply_window_theme(window))
+
+    # Calculate Centered Geometry
+    root = parent.winfo_toplevel()
+    root.update_idletasks()  # Ensure geometry is up to date
+
+    x = root.winfo_rootx() + (root.winfo_width() - width) // 2
+    y = root.winfo_rooty() + (root.winfo_height() - height) // 2
+
+    window.geometry(f"{width}x{height}+{x}+{y}")
+
+    # Modality
+    if modal:
+        window.transient(root)  # Keep on top of root
+        window.grab_set()  # Capture all events (freeze others)
+        window.focus_force()
+
+
 def excepthook(
     exc_type: type[BaseException],
     exc: BaseException,
@@ -259,19 +661,19 @@ def excepthook(
     sys.__excepthook__(exc_type, exc, tb)
 
 
-# --- Process/Spawn Helpers ---
-def _safe_spawn(
+sys.excepthook = excepthook
+
+
+def safe_spawn(
     command: Union[str, Sequence[str]],
     cwd: Optional[str] = None,
     timeout: float = 30.0,
     capture_output: bool = False,
     **popen_kwargs: Any,
 ) -> Union[subprocess.Popen[Any], Dict[str, Any]]:
-    """
-    Backwards-compatible safe spawn.
-    """
+    """Safe spawn wrapper."""
     logger.debug(
-        "_safe_spawn: command=%r cwd=%r capture_output=%s", command, cwd, capture_output
+        "safe_spawn: command=%r cwd=%r capture_output=%s", command, cwd, capture_output
     )
 
     if isinstance(command, str):
@@ -321,10 +723,10 @@ def _safe_spawn(
                 "stderr": proc_complete.stderr,
             }
         except subprocess.TimeoutExpired as te:
-            logger.error("_safe_spawn timeout: %s", te)
+            logger.error("safe_spawn timeout: %s", te)
             return {"returncode": 124, "stdout": None, "stderr": str(te)}
         except Exception as e:
-            logger.exception("_safe_spawn failed (capture): %s", e)
+            logger.exception("safe_spawn failed (capture): %s", e)
             return {"returncode": 1, "stdout": None, "stderr": str(e)}
     else:
         # return Popen so caller can wait/interact (Async mode)
@@ -341,17 +743,13 @@ def _safe_spawn(
             # nosec: B603 - executable validated via shutil.which
             return proc_popen
         except Exception as e:
-            logger.exception("_safe_spawn failed (popen): %s", e)
+            logger.exception("safe_spawn failed (popen): %s", e)
             raise
-
-
-# --- Permission-Related Logic ---
 
 
 def check_write_permission(path: str) -> tuple[bool, Optional[str]]:
     """
-    Check whether we can write to `path` (file or directory).
-    Returns (True, None) when writable. Otherwise returns (False, message).
+    Check whether we can write to `path`.
     """
     try:
         if not path:
@@ -361,10 +759,8 @@ def check_write_permission(path: str) -> tuple[bool, Optional[str]]:
         else:
             parent = os.path.dirname(path) or "."
 
-        # quick check
         if not os.access(parent, os.W_OK):
             err_msg = f"No write permission to '{parent}'"
-            # Diagnostic log: include short stack + thread so we can trace the caller
             try:
                 import threading
                 import traceback
@@ -439,13 +835,16 @@ def handle_permission_error(
         logger.debug("Permission dialog not shown (headless or no tkinter available).")
 
 
+T = TypeVar("T")
+
+
 def retry_on_permission(
-    op: Callable[[], Any],
-    parent: Optional[Any] = None,
+    op: Callable[[], T],
+    parent: Optional[tk.Widget] = None,
     path: Optional[str] = None,
     path_updater: Optional[Callable[[str], None]] = None,
     max_attempts: int = 5,
-) -> Any:
+) -> T:
     """
     Run operation `op()` and on permission-related failure show a dialog that
     lets the user Retry / Choose folder / Abort (GUI) or call handle_permission_error
@@ -475,7 +874,7 @@ def retry_on_permission(
 
             # Attempt GUI dialog if available
             try:
-                from gmos.ui import PermissionErrorDialog
+                from gmos.ui.widgets import PermissionErrorDialog
             except Exception:
                 # GUI not available. Delegate to central handler and re-raise.
                 try:
@@ -528,12 +927,8 @@ def retry_on_permission(
             raise last_exc from None
 
 
-# --- Misc Helpers ---
-
-
 def fast_tempfile(parent: str, prefix: str = ".gmos_tmp_") -> Tuple[int, str]:
     """
-    Extremely fast temp file generator for Windows.
     Produces a guaranteed-unique filename without using tempfile.mkstemp().
     """
     for _ in range(12):  # never needed more than 2–3
@@ -664,7 +1059,7 @@ def run_stream(
     # stream lines from stdout
     try:
         assert proc.stdout is not None  # for type checkers
-        for raw in iter(proc.stdout.readline, ""):
+        for raw in proc.stdout:
             # yield without trailing newline
             yield raw.rstrip("\n")
         proc.stdout.close()
@@ -685,6 +1080,12 @@ def run_stream(
             pass
         except Exception as e:
             logger.debug("Error terminating process: %s", e)
+
+
+def sanitize_filename(name: str) -> str:
+    """Return a filename safe version of the string."""
+    keep = (" ", ".", "_", "-")
+    return "".join(c for c in name if c.isalnum() or c in keep).strip()
 
 
 def resource_path(rel_path: str) -> str:
@@ -716,12 +1117,17 @@ __all__ = [
     "ROOT_DIR",
     "LOCK_PATH",
     "get_logger",
-    "_safe_spawn",
+    "safe_spawn",
     "check_write_permission",
     "handle_permission_error",
     "retry_on_permission",
     "safe_norm",
+    "sanitize_filename",
     "resource_path",
     "ModConfig",
-    "_get_mod_name_from_config",
+    "get_mod_name_from_config",
+    "detect_icon_theme",
+    "Image",
+    "ImageTk",
+    "get_dynamic_text_color",
 ]

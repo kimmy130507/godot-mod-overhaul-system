@@ -31,13 +31,13 @@ All potentially destructive actions are guarded by:
 # 2. Security Layers (Summary)
 
 1. **Manifest Validation**
-   Ensures mods conform to safe structure, correct paths, and dependency rules.
+   Ensures mods conform to safe structure, correct paths, and dependency rules. See [Manifest Format](docs/ModAuthorGuide/ManifestFormat.md).
 
 2. **Patch Scope Enforcement**
    Patches may only modify files inside the game directory.
 
 3. **Script Sanitization (Active)**
-   Rewrites unsafe `OS.execute` calls to `GMOS_Sandbox` secure wrappers.
+   Rewrites `OS.execute`, `OS.shell_open`, dynamic reflection calls, and `load()` calls to `GMOS_Sandbox` secure wrappers. See [Script Sanitization](docs/Security/ScriptSanitization.md).
 
 4. **Static Analysis (Passive)**
    Scans for and warns about:
@@ -45,10 +45,12 @@ All potentially destructive actions are guarded by:
    * **Network Usage:** `HTTPClient`, `HTTPRequest`.
    * **Binary Loading:** `load()` calls targeting `.dll`, `.so`, or `.dylib`.
 
+See [Static Analyzer](docs/Internals/StaticAnalyzer.md).
+
 5. **Dependency Validation**
-   Detects malicious or unexpected dependency chains.
+   Detects malicious or unexpected dependency chains. See [Dependency Validation](docs/Security/DependencyValidation.md).
 
 6. **Rollback System**
-   Immediately restores backups on failure.
+   Immediately restores backups on failure. See [Rollback System](docs/Security/RollbackSystem.md).
 
 These layers work together to form GMOS’s comprehensive security architecture.

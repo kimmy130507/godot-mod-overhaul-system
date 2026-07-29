@@ -17,13 +17,14 @@ GMOS protects against:
 GMOS actively **rewrites** scripts to prevent:
 - `OS.execute` (running external commands)
 - `OS.shell_open` (opening malicious URLs/files)
+- `load()` / `preload()` (loading compiled binary extensions like .dll/.so)
 
 These calls are routed to `GMOS_Sandbox`, which blocks them by default.
 
 ## 2.2. Arbitrary File Access (Passive Protection)
-Attempted access to system files (e.g., `C:/Windows`) is detected by the **Static Analyzer**.
-- **Mitigation:** GMOS displays high-severity warnings for `FileAccess` and `DirAccess` usage on absolute paths.
-- **Status:** User auditing required (Automated blocking is planned for v2.0).
+Attempted access to system singletons or files is detected by the **Static Analyzer**.
+- **Mitigation:** GMOS displays high-severity warnings for scope aliasing of `DirAccess`, `Directory`, `Expression`, `OS`, `ClassDB`, `ProjectSettings`, and `Engine`.
+- **Status:** User auditing required (Automated blocking is planned for a future release).
 
 ## 2.3. Path Traversal (Active Protection)
 Examples:

@@ -37,25 +37,30 @@ Each mod must be a subfolder inside `<GameDir>/mods/`. Example:
 
 ## Conflict Resolution
 
-When conflicts occur, GMOS opens the **Hunk Viewer**. In the viewer you can:
+When conflicts occur, GMOS opens the **Merge Studio** (see [Conflict Resolution & Debugging](docs/ModAuthorGuide/ConflictResolution.md)). In this window you can:
 
-- Choose one mod's change (accept A or accept B)
-- Merge hunks manually when possible
-- Abort the patch and fix the manifests
+- Visualize exactly where changes conflict in the file (highlighted in blue).
+- Choose a "Winner" (Vanilla, Mod A, Mod B).
+- Write a **Custom Patch** to manually merge logic.
 
-All user decisions are stored and reapplied on future patch runs.
+All decisions are saved to the Policy and are automatically reapplied on future patch runs.
 
 ## Supported Patch Types (high-level)
+For detailed usage and syntax, see the [Patch Types Guide](docs/ModAuthorGuide/PatchTypes.md).
 
-- **FileReplace** — replace an entire resource (binary or script)
-- **VariablePatch** — change top-level variables or constants in a script
-- **FunctionPatch** — prefix/postfix/replace functions using name-based wrappers
+- **FileReplace** — replace an entire resource (binary or script).
+- **VariablePatch** — change top-level variables or constants in a script.
+- **FunctionPatch** — prefix/postfix/replace functions using name-based wrappers.
+- **SmartPatch** — inject code into specific locations using token anchors.
+- **BinaryPatch** — apply binary deltas to non-text assets.
 
 *Note: To add new files (textures, sounds), simply include them in your mod folder.*
 
 ## Safe Script Rewriting & Sandbox
 
-GMOS scans script code for specific remote code execution risks (specifically `OS.execute` and `OS.shell_open`) and rewrites them to call the injected singleton `GMOS_Sandbox.secure_execute(...)`. This prevents direct execution of unsafe OS commands while preserving mod intent where possible.
+GMOS scans script code for specific remote code execution risks (specifically `OS.execute`, `OS.shell_open`, and dynamic reflection) and rewrites them to call the injected singleton `GMOS_Sandbox` secure wrappers. This prevents direct execution of unsafe OS commands while preserving mod intent where possible. Additionally, the sandbox autoload handles mounting the `gmos_override.pck` file at runtime, seamlessly loading your merged mod files without destructively altering the base game archives. 
+
+See [Script Sanitization](docs/Security/ScriptSanitization.md) for further technical details.
 
 ## Uninstalling Mods
 
@@ -67,10 +72,17 @@ No leftover artifacts remain in the original game files; backups are cleaned per
 
 ## CLI Mode
 
-GMOS currently supports a **Headless Dry-Run** mode intended for automated testing and CI pipelines.
+GMOS provides a command-line interface for managing mods, applying patches, and hosting peer-to-peer sync sessions.
 
 ```sh
-gmos --game-dir "C:/Games/Brotato" --instructions patch_plan.json
+gmos --game-dir "<path>" --mods-dir "<path>" [command]
 ```
 
-*Note: High-level management commands (e.g., --enable, --refresh) are planned for a future release.*
+**Supported Commands:**
+- `list`: List all installed mods, their state, and version.
+- `patch [--conflict overwrite|fail]`: Apply enabled mods to the game using the specified conflict resolution strategy.
+- `restore`: Restore game to vanilla state.
+- `mod enable <mod_name>`: Enable a specific mod.
+- `mod disable <mod_name>`: Disable a specific mod.
+- `p2p host`: Host a peer-to-peer mod sync lobby.
+- `p2p join <ip>`: Join a peer-to-peer mod sync lobby.

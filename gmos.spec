@@ -73,8 +73,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'GMOS',
         'CFBundleDisplayName': 'Godot Mod Overhaul Manager',
-        'CFBundleShortVersionString': '1.0.0',
-        'CFBundleVersion': '1.0.0',
+        'CFBundleShortVersionString': '2.0.0',
+        'CFBundleVersion': '2.0.0',
         'NSHighResolutionCapable': 'True'
     },
 )

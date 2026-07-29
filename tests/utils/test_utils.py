@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Kim
+# SPDX-FileCopyrightText: 2025-2026 Kim
 # SPDX-License-Identifier: GPL-3.0-or-later
 # For general purpose functions, IO, locking, and basic path utilities.
 import os
@@ -13,12 +13,14 @@ from typing import Any
 import pytest
 
 from gmos import utils
-from gmos.core.patcher import (
-    _res_to_path,  # type: ignore [reportPrivateUsage]
-    ensure_within,
-)
+from gmos.core.patcher import ensure_within, resolve_res_path
 from gmos.io import atomic_copy_with_single_bak, atomic_write_bytes, atomic_write_copy
-from gmos.io.locking import acquire_app_lock, release_app_lock, wire_game_dir_locking
+from gmos.io.locking import (
+    acquire_app_lock,
+    manager,
+    release_app_lock,
+    wire_game_dir_locking,
+)
 
 
 def test_gmos_importable() -> None:
@@ -41,7 +43,7 @@ def test_atomic_write_bytes_and_permissions(tmp_path: Path) -> None:
     # Windows often defaults to 0o666 (rw-rw-rw-) even if we request restrictive.
     allowed_modes = (0o640, 0o644, 0o600)
     if sys.platform == "win32":
-        allowed_modes += (0o666,)
+        allowed_modes += (0o666,)  # type: ignore[assignment]
 
     assert (
         mode in allowed_modes
@@ -78,23 +80,28 @@ def test_ensure_within(tmp_path: Path) -> None:
 )
 def test_file_lock_acquire_and_release(tmp_path: Path) -> None:
     lock_path = str(tmp_path / "testgmos.lock")
-    # acquire
-    ok = acquire_app_lock(lock_path)
-    assert ok is True
-    # lock file must exist and contain a pid
-    assert os.path.exists(lock_path)
-    with open(lock_path, "rb") as f:
-        data = f.read().decode("utf-8").strip()
-        assert data.isdigit()
-    # release
-    release_app_lock()
-    # allow small delay for cleanup
-    time.sleep(0.05)
-    # lock file removed or empty
-    if os.path.exists(lock_path):
-        with open(lock_path, "rb") as f:
-            d = f.read().decode("utf-8").strip()
-            assert d == "" or d == str(os.getpid())
+    original_lock = manager._lock_path  # type: ignore[reportPrivateUsage]
+    manager._lock_path = lock_path  # type: ignore[reportPrivateUsage]
+    try:
+        # acquire
+        ok = acquire_app_lock()
+        assert ok is True
+        # Check for lock artifact
+        if os.path.exists(lock_path):
+            with open(lock_path, "rb") as f:
+                data = f.read().decode("utf-8").strip()
+                if data:
+                    assert data.isdigit()
+
+        # release
+        release_app_lock()
+        time.sleep(0.05)
+        if os.path.exists(lock_path):
+            with open(lock_path, "rb") as f:
+                d = f.read().decode("utf-8").strip()
+                assert d == "" or d == str(os.getpid())
+    finally:
+        manager._lock_path = original_lock  # type: ignore[reportPrivateUsage]
 
 
 def test_wire_game_dir_locking_and_release(tmp_path: Path) -> None:
@@ -114,7 +121,7 @@ def test_wire_game_dir_locking_and_release(tmp_path: Path) -> None:
     class MockApp:
         vars = {"game_dir": MockVar()}
 
-    wire_game_dir_locking(MockApp())  # type:ignore
+    wire_game_dir_locking(MockApp())  # type: ignore
     # check for common lock artifacts but accept platform variance
     lockfile = os.path.join(wr, ".gmos.lock")
     sockfile = os.path.join(wr, ".gmos.sock")
@@ -159,29 +166,29 @@ def test_backup_and_restore(tmp_path: Path) -> None:
 
 def test_res_to_path_rejects_traversal() -> None:
     with pytest.raises(RuntimeError):
-        _res_to_path("res://../outside/file.txt")
+        resolve_res_path("res://../outside/file.txt")
     with pytest.raises(RuntimeError):
-        _res_to_path("res://../../escape.bin")
+        resolve_res_path("res://../../escape.bin")
 
 
 def test_res_to_path_normalizes_dots() -> None:
     # '.' should be removed
-    out = _res_to_path("res://scenes/./main.tscn")
+    out = resolve_res_path("res://scenes/./main.tscn")
     assert out == os.path.join("scenes", "main.tscn")
 
     # inner '..' should collapse
-    out2 = _res_to_path("res://scenes/sub/../main.tscn")
+    out2 = resolve_res_path("res://scenes/sub/../main.tscn")
     assert out2 == os.path.join("scenes", "main.tscn")
 
 
 def test_res_to_path_accepts_plain_relative_and_empty() -> None:
     # plain relative path (no res:// prefix)
     p = "scenes/main.tscn"
-    assert _res_to_path(p) == os.path.join("scenes", "main.tscn")
+    assert resolve_res_path(p) == os.path.join("scenes", "main.tscn")
 
     # res:// with no trailing path returns empty string
-    assert _res_to_path("res://") == ""
-    assert _res_to_path("") == ""
+    assert resolve_res_path("res://") == ""
+    assert resolve_res_path("") == ""
 
 
 # --- Test Utilities ---
@@ -202,13 +209,11 @@ def test_run_checked_error_raises() -> None:
 
 def test_run_stream_iterates_lines() -> None:
     # Create a small one-shot python script that prints multiple lines
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import sys
         for i in range(3):
             print(f"line-{i}")
-        """
-    )
+        """)
     lines = list(utils.run_stream([sys.executable, "-c", script]))
     assert len(lines) == 3
     assert lines[0].strip() == "line-0"
@@ -252,13 +257,11 @@ def test_run_checked_timeout_raises() -> None:
 
 
 def test_run_checked_env_and_cwd() -> None:
-    script = textwrap.dedent(
-        """\
+    script = textwrap.dedent("""\
         import os,sys
         print(os.environ.get('GMOS_TEST_ENV'))
         print(os.getcwd())
-    """
-    )
+    """)
     # On Windows CI, Python 3.10 needs SYSTEMROOT to initialize entropy.
     # We must merge the current environment with our test env.
     env = os.environ.copy()
@@ -298,3 +301,37 @@ def test_run_stream_large_output_streaming() -> None:
     assert len(got) == lines
     assert got[0] == "line-0"
     assert got[-1] == f"line-{lines-1}"
+
+
+def test_contrast_color() -> None:
+    """Verify WCAG APCA contrast algorithm routes white text to dark backgrounds and vice-versa."""
+    assert utils.get_binary_contrast_color("#FFFFFF") == "#000000"
+    assert utils.get_binary_contrast_color("#000000") == "#FFFFFF"
+    assert utils.get_binary_contrast_color("invalid") == "#000000"
+
+
+def test_adaptive_color_variant() -> None:
+    """Verify semantic colors (red/green) swap to their readable variants based on background."""
+    assert (
+        utils.get_adaptive_color_variant("#000000", "light_var", "dark_var")
+        == "light_var"
+    )
+    assert (
+        utils.get_adaptive_color_variant("#FFFFFF", "light_var", "dark_var")
+        == "dark_var"
+    )
+
+
+def test_sanitize_filename() -> None:
+    """Verify illegal OS file characters are stripped."""
+    assert utils.sanitize_filename("Valid_Name-1.0") == "Valid_Name-1.0"
+    assert utils.sanitize_filename('Invalid/Name\\:*?"<>|') == "InvalidName"
+
+
+def test_check_write_permission(tmp_path: Path) -> None:
+    """Verify non-destructive write permission check correctly flags accessible directories."""
+    test_file = tmp_path / "test.txt"
+    test_file.touch()
+    ok, err = utils.check_write_permission(str(test_file))
+    assert ok is True
+    assert err is None

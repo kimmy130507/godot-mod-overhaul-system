@@ -1,5 +1,5 @@
 # GMOS - Godot Mod Overhaul System
-# Copyright (C) 2025 Kim
+# Copyright (C) 2025-2026 Kim
 #
 # This file is part of GMOS.
 #
@@ -15,372 +15,285 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with GMOS.  If not, see <https://www.gnu.org/licenses/>.
-from __future__ import annotations
+"""
+Configuration Management
+1. Global Registry (global_config.json) in User Data.
+2. Instance Configuration (instance.json) in Game Directory.
+"""
 
 import json
 import os
-import threading
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, cast
+import sqlite3
+import sys
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Optional, cast
 
-from gmos import utils
 from gmos.io import atomic_replace
-from gmos.utils import get_logger
+from gmos.utils import logger
 
-logger = get_logger()
-if TYPE_CHECKING:
-    import tkinter as _tk
-
-    Tk = _tk.Tk
-    Toplevel = _tk.Toplevel
-    Misc = _tk.Misc
-DEFAULTS = {
-    "game_dir": ".",  # Single game directory
-    "mods_dir": "./mods",
-    "game_executable": "game.exe",  # The game's executable name
-    "launch_override": "",
-}
-
-# Global lock for thread-safe config I/O
-_config_lock = threading.RLock()
+GLOBAL_DB_FILENAME = "global_registry.db"
+LEGACY_CONFIG_FILENAME = "global_config.json"
+INSTANCE_CONFIG_FILENAME = "instance.json"
 
 
-def get_config_path(config_dir: Optional[str] = None) -> str:
-    """Return full path to config.json, always prioritizing the CWD.
-    Accept override for tests or custom path saving.
-    """
-    if config_dir:
-        # Allows for overrides (e.g., in testing)
-        return os.path.join(config_dir, "config.json")
-    return os.path.abspath(os.path.join(os.getcwd(), "config.json"))
+@dataclass
+class InstanceMetadata:
+    """Metadata for the Game Selector UI."""
+
+    id: str
+    name: str
+    path: str
+    godot_version: int = 0
+    custom_name: Optional[str] = None
+    icon_path: Optional[str] = None
 
 
-class SetupWizard:
-    """Simple modal setup wizard for first-run configuration.
+@dataclass
+class GlobalConfig:
+    """Application-wide registry."""
 
-    This class creates the real `tk.Toplevel` lazily inside __init__ so importing
-    gmos.config does not require tkinter to be available or to be imported.
-    """
-
-    # 'Tk' inherits from 'Wm' (for transient) and 'Misc' (for Toplevel master and winfo_*).
-    def __init__(self, parent: "Tk", config_path: Optional[str] = None):
-        # Delayed tkinter imports so headless imports/tests remain cheap
-        import tkinter as tk
-        from tkinter import filedialog, messagebox
-
-        self._tk = tk
-        self._filedialog = filedialog
-        self._messagebox = messagebox
-        # Create a real Toplevel instance attached to the provided parent.
-        # Annotate so static analyzers know the attribute's type.
-        self._toplevel: "Toplevel" = tk.Toplevel(parent)
-        utils.load_and_apply_app_icon_to_toplevel(self._toplevel)
-        self.parent = parent
-        self.config_path = config_path or get_config_path()
-        self.result: Optional[Dict[str, Any]] = None
-
-        self._toplevel.title("GMOS Setup")
-        self._toplevel.resizable(False, False)
-
-        frm = tk.Frame(self._toplevel, padx=12, pady=12)
-        frm.pack(fill="both", expand=True)
-
-        tk.Label(frm, text="Game Executable:").grid(row=0, column=0, sticky="w")
-        self.path_var = tk.StringVar()
-        tk.Entry(frm, textvariable=self.path_var, width=60).grid(
-            row=1, column=0, columnspan=2, sticky="we", pady=(0, 6)
-        )
-        tk.Button(frm, text="Browse", command=self._browse_exe).grid(
-            row=1, column=2, padx=(6, 0), sticky="w"
-        )
-        btn_frame = tk.Frame(frm)
-        btn_frame.grid(row=4, column=0, columnspan=3, pady=(8, 0))
-        tk.Button(btn_frame, text="Cancel", command=self._on_cancel).pack(
-            side="right", padx=4
-        )
-        tk.Button(btn_frame, text="OK", command=self._on_ok).pack(side="right")
-
-        # Try to make modal; fall back to non-modal focused window if grab fails
-        self._grab_acquired = False
-        try:
-            self._toplevel.transient(parent)
-            self._toplevel.grab_set()
-            self._grab_acquired = True
-        except tk.TclError:
-            logger.warning(
-                "SetupWizard: could not acquire grab; proceeding without modality."
-            )
-            try:
-                self._toplevel.focus_set()
-                try:
-                    self._toplevel.attributes("-topmost", True)  # type: ignore[unknownMemberType]
-                    self._toplevel.after(200, lambda: self._toplevel.attributes("-topmost", False))  # type: ignore[unknownMemberType]
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-        self._toplevel.protocol("WM_DELETE_WINDOW", self._on_cancel)
-
-        # Center dialog
-        try:
-            self._toplevel.update_idletasks()
-            wiz_w = self._toplevel.winfo_reqwidth()
-            wiz_h = self._toplevel.winfo_reqheight()
-            scr_w = self._toplevel.winfo_screenwidth()
-            scr_h = self._toplevel.winfo_screenheight()
-
-            def _is_parent_sane(p: "Tk") -> bool:
-                try:
-                    if not getattr(p, "winfo_ismapped", lambda: False)():
-                        return False
-                    p.update_idletasks()
-                    px = p.winfo_rootx()
-                    py = p.winfo_rooty()
-                    pw = p.winfo_width() or p.winfo_reqwidth()
-                    ph = p.winfo_height() or p.winfo_reqheight()
-                    if (
-                        pw <= 0
-                        or ph <= 0
-                        or abs(px) > (scr_w * 4)
-                        or abs(py) > (scr_h * 4)
-                    ):
-                        return False
-                    return True
-                except Exception:
-                    return False
-
-            use_parent = _is_parent_sane(parent)
-            if use_parent:
-                px = parent.winfo_rootx()
-                py = parent.winfo_rooty()
-                pw = parent.winfo_width() or parent.winfo_reqwidth() or scr_w // 2
-                ph = parent.winfo_height() or parent.winfo_reqheight() or scr_h // 2
-                x = px + (pw - wiz_w) // 2
-                y = py + (ph - wiz_h) // 2
-            else:
-                x = (scr_w - wiz_w) // 2
-                y = (scr_h - wiz_h) // 2
-
-            x = int(max(-scr_w, min(x, scr_w - 20)))
-            y = int(max(-scr_h, min(y, scr_h - 20)))
-            self._toplevel.geometry(f"{wiz_w}x{wiz_h}+{x}+{y}")
-        except Exception:
-            logger.debug("SetupWizard centering failed", exc_info=True)
-
-        try:
-            self._toplevel.deiconify()
-        except Exception:
-            pass
-
-        try:
-            self._toplevel.lift()  # type: ignore[unknownMemberType]
-            try:
-                self._toplevel.attributes("-topmost", True)  # type: ignore[unknownMemberType]
-                self._toplevel.after(200, lambda: self._toplevel.attributes("-topmost", False))  # type: ignore[unknownMemberType]
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-    def __getattr__(self, name: str) -> Any:
-        """
-        Proxy unknown attributes to the underlying Toplevel instance.
-        This makes SetupWizard behave like a widget for tests and code that
-        expects Toplevel methods (update_idletasks, wait_window, etc.).
-        """
-        # avoid infinite recursion if _toplevel isn't set
-        if name.startswith("_"):
-            raise AttributeError(name)
-        try:
-            return getattr(self._toplevel, name)
-        except Exception as e:
-            # expose a clearer AttributeError for callers
-            raise AttributeError(name) from e
-
-    def update_idletasks(self) -> None:
-        """Expose update_idletasks on the wrapper for compatibility with tests."""
-        return self._toplevel.update_idletasks()
-
-    @property
-    def window(self) -> "Toplevel":
-        """Return the underlying Toplevel widget."""
-        return self._toplevel
-
-    def _browse_exe(self) -> None:
-        p = self._filedialog.askopenfilename(
-            title="Select Game Executable",
-            filetypes=[("Executables", "*.exe"), ("All Files", "*.*")],
-        )
-        if p:
-            self.path_var.set(p)
-
-    def _on_cancel(self) -> None:
-        # Return None and close the wizard. Do NOT quit the parent/root mainloop.
-        self.result = None
-        try:
-            if getattr(self, "_grab_acquired", False):
-                try:
-                    self._toplevel.grab_release()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        try:
-            self._toplevel.destroy()
-        except Exception:
-            # best-effort: ensure dialog teardown doesn't crash app
-            pass
-
-    def _on_ok(self) -> None:
-        raw_path = self.path_var.get().strip()
-
-        game_dir = ""
-        exe_name = ""
-
-        # Logic 1: User picked a file (The "Aggressive" Path)
-        if os.path.isfile(raw_path):
-            game_dir = os.path.dirname(raw_path)
-            exe_name = os.path.basename(raw_path)
-
-        # Logic 2: User picked a directory (Legacy fallback)
-        elif os.path.isdir(raw_path):
-            game_dir = raw_path
-            # Try to detect largest exe
-            largest_size = 0
-            try:
-                for f in os.listdir(game_dir):
-                    if f.lower().endswith(".exe") and "unins" not in f.lower():
-                        full_path = os.path.join(game_dir, f)
-                        size = os.path.getsize(full_path)
-                        if size > largest_size:
-                            largest_size = size
-                            exe_name = f
-            except Exception:
-                pass
-        else:
-            self._messagebox.showerror(
-                "Error", "Please select a valid executable file."
-            )
-            return
-
-        if not os.access(game_dir, os.W_OK):
-            self._messagebox.showerror(
-                "Permission Error", f"Directory not writable:\n{game_dir}"
-            )
-            return
-
-        if not exe_name:
-            exe_name = "game.exe"
-
-        cfg = {
-            "game_dir": game_dir,
-            "game_executable": exe_name,
-            "mods_dir": os.path.join(game_dir, "mods"),
-        }
-
-        try:
-            write_config(cfg, self.config_path)
-            self.result = cfg
-            self._toplevel.destroy()
-        except Exception as e:
-            self._messagebox.showerror(
-                "Save Error", f"Failed to save configuration: {e}"
-            )
+    schema_version: str = "2.0"
+    default_instance_id: Optional[str] = None
+    theme_preference: str = "darkly"
+    nexus_api_key: str = ""
+    legal_accepted: bool = False
+    sandbox_enabled: bool = True
+    icon_set: str = "Default"
+    godot_editor_path: str = ""
+    instances: Dict[str, InstanceMetadata] = field(default_factory=lambda: {})
 
 
-def ensure_config(
-    config_path: Optional[str] = None,
-    headless_defaults: Optional[Dict[str, Any]] = None,
-    force_setup: bool = False,
-) -> Dict[str, Any]:
-    """
-    Ensure a configuration exists. If not present or force_setup is True:
-      - if headless_defaults provided, write them and return
-      - otherwise show the GUI SetupWizard in an isolated root (only if needed)
-        and return the resulting config or {}.
-    """
-    p = config_path or get_config_path()
+@dataclass
+class InstanceConfig:
+    """Game-specific configuration."""
 
-    if not force_setup:
-        cfg = load_config(p)
-        if cfg and cfg.get("game_dir"):
-            return cfg
+    game_dir: str
+    mods_dir: str
+    game_executable: str = "game.exe"
+    launch_override: str = ""
+    last_played: str = ""  # ISO format date
+    mod_website: str = ""
+    active_profile: str = ""
+    executables: List[Dict[str, Any]] = field(default_factory=lambda: [])
+    is_packed: bool = False
 
-    if headless_defaults is not None:
-        write_config(headless_defaults, p)
-        return headless_defaults
 
-    import tkinter as tk
+def get_app_data_path() -> str:
+    """Resolves the OS-specific application data directory."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        # Linux / Unix: XDG support
+        base = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
 
-    # Prefer existing application root if one exists.
-    created_root = False
+    return os.path.join(base, "gmos")
 
+
+def get_global_config_path() -> str:
+    """Returns the path to the global registry in AppData."""
+    return os.path.join(get_app_data_path(), GLOBAL_DB_FILENAME)
+
+
+def _get_db_connection() -> sqlite3.Connection:
+    """Establishes and returns a connection to the SQLite database."""
+    path = get_global_config_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_db(conn: sqlite3.Connection) -> None:
+    """Creates the database schema if it doesn't exist."""
+    with conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+            CREATE TABLE IF NOT EXISTS instances (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                path TEXT,
+                godot_version INTEGER DEFAULT 0,
+                custom_name TEXT,
+                icon_path TEXT
+            );
+        """)
+
+
+def _migrate_legacy_json(conn: sqlite3.Connection) -> None:
+    """Migrates legacy global_config.json to SQLite."""
+    legacy_path = os.path.join(get_app_data_path(), LEGACY_CONFIG_FILENAME)
+    if not os.path.exists(legacy_path):
+        return
+
+    # Skip if DB already populated
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM instances")
+    if cur.fetchone()[0] > 0:
+        return
+
+    logger.info("Migrating legacy global_config.json to SQLite...")
     try:
-        # Check for _default_root which is typically Tk or None
-        _existing_root: Optional[Tk] = getattr(tk, "_default_root", None)
-        if _existing_root and _existing_root.winfo_exists():
-            root = _existing_root
-        else:
-            # Create a new Tk root
-            root = tk.Tk()
-            root.withdraw()
-            created_root = True
-    except Exception:
-        # Create a new Tk root if getattr fails
-        root = tk.Tk()
-        root.withdraw()
-        created_root = True
+        with open(legacy_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-    # Create the modal dialog as a Toplevel attached to `root`.
-    # Pylance now knows `root` is of type `Tk`
-    wiz = SetupWizard(root, config_path=p)
+        settings = cast(
+            Dict[str, Any],
+            {
+                "schema_version": data.get("schema_version", "2.0"),
+                "default_instance_id": data.get("default_instance_id"),
+                "theme_preference": data.get("theme_preference", "darkly"),
+                "nexus_api_key": data.get("nexus_api_key", ""),
+                "legal_accepted": str(data.get("legal_accepted", False)).lower(),
+                "icon_set": data.get("icon_set", "Default"),
+                "godot_editor_path": data.get("godot_editor_path", ""),
+            },
+        )
 
-    # Block until dialog closed. Use wait_window so we don't run a second mainloop.
-    try:
-        root.wait_window(wiz.window)
+        with conn:
+            for k, v in settings.items():
+                if v is not None:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                        (k, str(v) if v is not None else ""),
+                    )
+
+            inst_data = cast(Dict[str, Any], data.get("instances", {}))
+            for k, v in inst_data.items():
+                conn.execute(
+                    """
+                    INSERT INTO instances (id, name, path, godot_version, custom_name, icon_path)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        v.get("id", k),
+                        v.get("name", "Unknown"),
+                        v.get("path", ""),
+                        v.get("godot_version", 0),
+                        v.get("custom_name"),
+                        v.get("icon_path"),
+                    ),
+                )
+
+        # Rename legacy file to .bak
+        os.replace(legacy_path, legacy_path + ".bak")
+        logger.info("Migration complete.")
     except Exception as e:
-        logger.debug("wait_window for SetupWizard failed (ignored): %s", e)
-
-    res = wiz.result or {}
-
-    # If we created a temporary root we must destroy it.
-    if created_root:
-        try:
-            # Pylance now knows root is not None here
-            if root.winfo_exists():
-                root.destroy()
-        except Exception as e:
-            logger.debug("temporary root.destroy() failed (ignored): %s", e)
-
-    return res
+        logger.error(f"Migration failed: {e}")
 
 
-def load_config(path: Optional[str] = None) -> Dict[str, Any]:
-    """Load JSON config. Returns {} when file missing or invalid."""
-    p = path or get_config_path()
-    with _config_lock:
-        # If the file doesn't exist at the CWD location, return an empty config.
-        if not os.path.exists(p):
-            return {}
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                return cast(Dict[str, Any], json.load(f))
-        except Exception:
-            return {}
+def load_global_config() -> GlobalConfig:
+    """Loads the global registry from SQLite."""
+    try:
+        conn = _get_db_connection()
+        _init_db(conn)
+        _migrate_legacy_json(conn)
+
+        cur = conn.cursor()
+        cur.execute("SELECT key, value FROM settings")
+        settings = {row["key"]: row["value"] for row in cur.fetchall()}
+
+        cur.execute("SELECT * FROM instances")
+        instances: Dict[str, InstanceMetadata] = {}
+        for row in cur.fetchall():
+            meta = InstanceMetadata(
+                id=row["id"],
+                name=row["name"],
+                path=row["path"],
+                godot_version=int(row["godot_version"]),
+                custom_name=row["custom_name"],
+                icon_path=row["icon_path"],
+            )
+            instances[meta.id] = meta
+
+        conn.close()
+
+        return GlobalConfig(
+            schema_version=settings.get("schema_version", "2.0"),
+            default_instance_id=settings.get("default_instance_id"),
+            theme_preference=settings.get("theme_preference", "darkly"),
+            nexus_api_key=settings.get("nexus_api_key", ""),
+            legal_accepted=(settings.get("legal_accepted", "false") == "true"),
+            icon_set=settings.get("icon_set", "Default"),
+            godot_editor_path=settings.get("godot_editor_path", ""),
+            instances=instances,
+        )
+    except Exception as e:
+        logger.error(f"Failed to load global db: {e}")
+        return GlobalConfig()
 
 
-def write_config(cfg: Dict[str, Any], path: Optional[str] = None) -> None:
-    """Write JSON config to the specified path, defaulting to CWD."""
-    p = path or get_config_path()
-    with _config_lock:
-        try:
-            # ensure parent dir exists (fixes FileNotFoundError in tests)
-            parent = Path(p).parent
-            parent.mkdir(parents=True, exist_ok=True)
-            # Use atomic_replace for data integrity (Phase 1, Sec 3.3)
-            json_str = json.dumps(cfg, indent=2)
-            atomic_replace(p, json_str)
-        except Exception as e:
-            logger.error("Failed to write config file to %s: %s", p, e)
-            raise
+def save_global_config(cfg: GlobalConfig) -> None:
+    """Saves the global registry to SQLite."""
+    try:
+        conn = _get_db_connection()
+        _init_db(conn)
+        with conn:
+            settings_map: Dict[str, Any] = {
+                "schema_version": cfg.schema_version,
+                "default_instance_id": cfg.default_instance_id,
+                "theme_preference": cfg.theme_preference,
+                "nexus_api_key": cfg.nexus_api_key,
+                "legal_accepted": str(cfg.legal_accepted).lower(),
+                "icon_set": cfg.icon_set,
+                "godot_editor_path": cfg.godot_editor_path,
+            }
+            for k, v in settings_map.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (k, str(v) if v is not None else ""),
+                )
+
+            conn.execute("DELETE FROM instances")
+
+            if cfg.instances:
+                params = [
+                    (
+                        meta.id,
+                        meta.name,
+                        meta.path,
+                        meta.godot_version,
+                        meta.custom_name,
+                        meta.icon_path,
+                    )
+                    for meta in cfg.instances.values()
+                ]
+                conn.executemany(
+                    """
+                    INSERT INTO instances (id, name, path, godot_version, custom_name, icon_path)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                    params,
+                )
+
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to save global db: {e}")
+
+
+def load_instance_config_dict(path: str) -> Dict[str, Any]:
+    """Loads an instance config as a dictionary for UI consumption."""
+    defaults = asdict(InstanceConfig(game_dir="", mods_dir=""))
+    if not os.path.exists(path):
+        return defaults
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        defaults.update(data)
+        return defaults
+    except Exception as e:
+        logger.error(f"Failed to load instance config {path}: {e}")
+        return defaults
+
+
+def save_instance_config_dict(data: Dict[str, Any], path: str) -> None:
+    """Saves the UI configuration dictionary to the instance file."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        atomic_replace(path, json.dumps(data, indent=2))
+    except Exception as e:
+        logger.error(f"Failed to save config {path}: {e}")

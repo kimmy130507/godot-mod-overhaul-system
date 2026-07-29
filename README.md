@@ -4,7 +4,7 @@
 
 GMOS generates a patched working copy of a game at launch time, allowing mods to replace assets, patch scripts, and inject logic **without permanently altering the original installation**.
 
-It features a **"Gold Standard" Architecture** built on five pillars (Core, IO, State, UI, Utils) to ensure robustness, thread safety, and testability.
+It features a **"Gold Standard" Architecture** built on six pillars (Core, IO, State, Net, UI, Utils) to ensure robustness, thread safety, and testability.
 
 ## **Features**
 
@@ -86,10 +86,10 @@ Comprehensive documentation is available in the repository:
 ## **Contributing**
 
 Pull requests are welcome!
-Please ensure you follow the **5-Pillar Architecture** and run the test suite.
+Please ensure you follow the **6-Pillar Architecture** and run the test suite.
 
   * **Linting:** `ruff`, `black`, `mypy` (Strict)
-  * **Tests:** `pytest` (Core, IO, UI)
+  * **Tests:** `pytest` (Core, IO, Net, State, UI, Utils)
 
 See [Contributing Guide](docs/Development/Contributing.md).
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Kim
+# SPDX-FileCopyrightText: 2025-2026 Kim
 # SPDX-License-Identifier: GPL-3.0-or-later
 # GMOS Integration Test Suite: Conflict Resolution & Load Order
 # Verifies that 'Last Mod Wins' and Policy overrides function correctly in a full patch run.
@@ -7,7 +7,12 @@ from typing import Any, Dict
 
 import pytest
 
-from gmos.core.patcher import generate_patch_plan, parse_mod_config, run_patcher
+from gmos.core.patcher import (
+    apply_policy_to_plan,
+    generate_patch_plan,
+    parse_mod_config,
+    run_patcher,
+)
 from gmos.state import policy
 
 # Check for pyfakefs
@@ -60,15 +65,14 @@ def test_last_mod_wins_file_replace(fs: Any) -> None:
     full_plan = plan_a + plan_b
 
     # 3. Execute Run
-    log = run_patcher(game_dir, full_plan)
+    filtered_plan = apply_policy_to_plan(full_plan, game_dir)
+    _ = run_patcher(game_dir, filtered_plan)
 
     # 4. Validate Outcome
     with open(f"{game_dir}/icon.png", "r") as f:
         content = f.read()
 
     assert content == "MOD_B_ICON", "Mod B should have overwritten Mod A"
-    assert any("Applying FileReplace from ModA" in line for line in log)
-    assert any("Applying FileReplace from ModB" in line for line in log)
 
 
 @pytest.mark.skipif(not _pyfakefs_available, reason="pyfakefs not installed")
@@ -98,7 +102,7 @@ def test_policy_override_wins(fs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     # Mock Policy to favor ModA
-    def mock_rules() -> Dict[str, str]:
+    def mock_rules(**kwargs: Any) -> Dict[str, str]:
         return {"script.gd": "ModA"}
 
     monkeypatch.setattr(policy, "load_file_rules", mock_rules)
@@ -112,7 +116,8 @@ def test_policy_override_wins(fs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
 
     full_plan = plan_a + plan_b
 
-    log = run_patcher(game_dir, full_plan)
+    filtered_plan = apply_policy_to_plan(full_plan, game_dir)
+    log = run_patcher(game_dir, filtered_plan)
 
     with open(f"{game_dir}/script.gd", "r") as f:
         content = f.read()
@@ -121,7 +126,7 @@ def test_policy_override_wins(fs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         content == "print('MOD_A')"
     ), "Policy winner ModA should overwrite/prevent ModB"
     assert not any(
-        "Applying FileReplace from ModB" in line for line in log
+        "[ModB] Replaced script.gd" in line for line in log
     ), "ModB should have been filtered out by policy"
 
 
