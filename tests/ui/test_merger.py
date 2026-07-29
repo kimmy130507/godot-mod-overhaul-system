@@ -185,8 +185,11 @@ def test_save_unified_patch(tk_root: tk.Tk, mock_app: MagicMock) -> None:
             "code": "var speed = 9999",
         }
 
-        # Mocking os.makedirs to avoid FS errors
-        with patch("os.makedirs"):
+        # Mock the low-level AtomicFile write to avoid all physical FS operations and capture data
+        with (
+            patch("os.makedirs"),
+            patch("gmos.io.base.AtomicFile.write") as mock_atomic_write,
+        ):
             studio._save_all()  # type: ignore[reportPrivateUsage]
 
         # Verify file writes
@@ -194,8 +197,15 @@ def test_save_unified_patch(tk_root: tk.Tk, mock_app: MagicMock) -> None:
         # 1. The patched player.gd
         # 2. The mod.mos manifest
 
-        handle = m_open()
-        writes = [call.args[0] for call in handle.write.call_args_list]
+        # Capture standard open() writes
+        writes = [
+            str(call.args[0]) for call in m_open().write.call_args_list if call.args
+        ]
+
+        # Capture AtomicFile writes (content is the first argument)
+        writes += [
+            str(call.args[0]) for call in mock_atomic_write.call_args_list if call.args
+        ]
 
         # Check manifest content
         assert any("[ModInfo]" in w for w in writes)
