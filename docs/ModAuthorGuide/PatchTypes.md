@@ -1,6 +1,6 @@
 # Patch Types
 
-GMOS supports three core patch types. Each serves a different purpose and has different merging semantics.
+GMOS supports five core patch types. Each serves a different purpose and has different merging semantics.
 
 # 1. FileReplace
 
@@ -44,7 +44,11 @@ The section `[DataAdd]` is an alias for `VariablePatch` with `mode=create`.
 
 # 3. FunctionPatch
 
-Modifies or wraps functions.
+Modifies or wraps complete functions at their outer perimeters.
+ 
+GMOS utilizes the `CSTParser` to token-scan scripts to resolve macro boundaries of functions. 
+Multiple `prefix_` and `postfix_` updates affecting the same function are compiled sequentially into clean, flat aggregation blocks rather than deep, nested hierarchies. Each injected block is annotated with explicit mod origins to streamline runtime debugging.
+
 
 ```ini
 [FunctionPatch]
@@ -71,12 +75,87 @@ res://combat.gd::new_special_move = patches/combat_mod.gd::new_special_move ; mo
 **Renaming in Replace Mode:**
 When performing a full replace, you can name the function in your patch file whatever you like (e.g., `my_cool_hook`). GMOS will automatically rewrite the signature to match the target function's name (e.g., `_process`) during the patch process.
 
+# 4. SmartPatch
+
+Injects targeted logic *inside* an existing function or variable block structural boundary without replacing it entirely. This is the most resilient approach for avoiding logic collisions.
+
+* **Anchor Mode**: Tokenizes both the block and your `anchor="..."` code string snippet. Splicing occurs immediately after the matching sequence regardless of surrounding formatting churn.
+* **Boundary Mode**: If no anchor is defined, setting `at=start` injects lines immediately below the block header's colon, while `at=end` splices code directly before the final block dedent line.
+
+```ini
+[SmartPatch]
+; Inject at the start of the function (right after the declaration)
+res://player.gd::_ready = patches/hooks.gd::init_hook ; at=start
+
+; Inject at the end of the function (default behavior)
+res://player.gd::_ready = patches/hooks.gd::cleanup_hook ; at=end
+
+; Inject at specific token anchor
+res://player.gd::_ready = patches/hooks.gd::init_hook ; anchor="super._ready()"
+
+```
+
+**Metadata:**
+
+| field | description |
+| --- | --- |
+| `anchor` | A snippet of code (string) to search for inside the target block. Code is injected after the line containing the match. |
+| `at` | `end` (default) or `start`. Ignored if `anchor` is used. |
+
+**Example:**
+If `player.gd` contains:
+
+```gdscript
+func take_damage(amount):
+    health -= amount
+    if health <= 0:
+        die()
+
+```
+
+And your manifest uses an anchor:
+
+```ini
+res://player.gd::take_damage = my_patch.gd ; anchor="health -= amount"
+
+```
+
+The code from `my_patch.gd` will be inserted immediately after the line `health -= amount`.
+
+- If your manifest uses `at=start`:
+
+```ini 
+res://player.gd::take_damage = my_patch.gd ; at=start
+
+```
+
+The code from `my_patch.gd` will be inserted immediately after the line `func take_damage(amount):`.
+
+- If your manifest uses `at=end`:
+
+```ini 
+res://player.gd::take_damage = my_patch.gd ; at=end
+
+```
+
+The code from `my_patch.gd` will be inserted at the very bottom of the function (after `die()`).
+
+# 5. BinaryPatch
+Applies a binary delta (`bsdiff4`) to non-text assets.
+
+```ini 
+[BinaryPatch]
+res://art/player.tex = patches/player_skin.bin
+
+```
+
+Use this to apply compact binary diffs for large assets instead of shipping full file replacements. Multiple binary patches on the same file without strict ordering will flag a conflict.
+
 # Patch Priority
 
 GMOS resolves:
-
 1.  dependencies (`[Dependencies]`)
 2.  load order (user defined or folder name)
 3.  persistent conflict policies
 
-In a conflict, GMOS opens the hunk viewer to let you select the winning code.
+In a conflict, GMOS opens the **Merge Studio** to let you select the winning code or write a custom patch.

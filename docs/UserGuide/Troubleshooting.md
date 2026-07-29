@@ -7,7 +7,7 @@ Common problems and how to fix them.
 GMOS writes logs to platform-appropriate locations.
 * **Windows**: `%APPDATA%\gmos\logs\gmos.log` (Roaming Profile)
 * **Linux**: `~/.local/share/gmos/logs/gmos.log`
-* **macOS**: `~/Library/Logs/gmos/gmos.log`
+* **macOS**: `~/.local/share/gmos/logs/gmos.log`
 
 Please include `gmos.log` when reporting issues.
 
@@ -30,20 +30,15 @@ This commonly happens when a mod references an asset path expecting the mod fold
 * If the game is in a protected folder, run GMOS as **Administrator** to allow atomic writes.
 * Check antivirus logs — some AVs block the creation of `.tmp` or `.bak` files.
 
-## PCK-related issues
-
-* **Force PCK Patching:** This mode appends mod files directly to the game's `.pck` archive. It is robust but modifies the main game file.
-* **Corruption:** If the game fails to start after a PCK patch, click **Revert Game Files** to restore the clean `main.pck.bak`.
-* *Note: You do **not** need GDRE Tools to use the "Force PCK Patching" feature; GMOS handles this natively.*
-
 ## Sandbox rewrites cause syntax errors
 
-* Rarely, the script sanitizer (which rewrites `OS.execute`) may produce invalid syntax if the mod code uses highly unconventional formatting.
+* Rarely, the script sanitizer (which rewrites `OS.execute`, `OS.shell_open`, dynamic reflection, and `load`) may produce invalid syntax if the mod code uses highly unconventional formatting. See [Script Sanitization](docs/Security/ScriptSanitization.md) for details on rewrite triggers.
+
 * **Fix:** Inspect the patched `.gd` file in the game directory. If the rewrite is incorrect, contact the mod author or report a bug with the specific code snippet.
 
 ## The game crashes after applying mods
 
-1.  **Disable all mods** and click **Apply Patch**. Verify the vanilla game launches.
+1.  **Disable all mods** and click **Patch**, or **Revert Game Files** to perform a clean rollback. Verify the vanilla game launches.
 2.  Enable mods one-by-one to identify the culprit.
 3.  Check `gmos.log` and the game's own crash logs (often in `%APPDATA%/Godot/app_userdata/`).
 

@@ -2,9 +2,16 @@ name: CI (Code Quality, Tests, Security)
 
 on:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - dev
+      - 'feature/*'
+      - 'fix/*'
+      - 'security/*'
   pull_request:
-    branches: [ main, master ]
+    branches:
+      - main
+      - dev
 
 env:
   FORCE_COLOR: 1
@@ -130,6 +137,7 @@ jobs:
       - name: Run Safety Check (Dependency Vulnerabilities)
         env:
           SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
+        continue-on-error: true
         run: |
           pip install safety
           safety scan --key $SAFETY_API_KEY

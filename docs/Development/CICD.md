@@ -26,11 +26,12 @@ The packaging workflow (`workflows/package.yml`) runs on version tags (`v*`) and
 1. **GMOS Application Binary** (`GMOS` / `GMOS.exe`)
    - A single-file executable built via **PyInstaller**.
    - Bundled as a standalone executable (Windows/Linux) or DMG (macOS).
+   - The `LICENSE` file is automatically packaged alongside the binary and inside the DMG payload.
 2. **Python Distributions**:
    - **Source Tarball** (`.tar.gz`) for distribution.
    - **Wheel** (`.whl`) for pip installation.
 3. **Checksums**: `SHA256` hashes for verification.
-4. **GPG Signatures**: Detached signatures (`.sig.asc`) for provenance (Windows builds).
+4. **GPG Signatures**: Detached signatures (`.sig.asc`) for provenance on all compiled platforms (Windows, Linux, macOS).
 
 # 3. Build Environment
 
@@ -38,6 +39,7 @@ The packaging workflow (`workflows/package.yml`) runs on version tags (`v*`) and
 - **Windows**: Windows-latest, uses `magick`.
 - **macOS**: macOS-latest, uses `iconutil` and `create-dmg`.
 
+All GUI packaging environments install **Node.js 24** and pin **Python 3.11** for stable dependency hashing and asset generation.
 All builds rely on `pyproject.toml` and `gmos.spec` for configuration.
 
 # 4. E2E Testing

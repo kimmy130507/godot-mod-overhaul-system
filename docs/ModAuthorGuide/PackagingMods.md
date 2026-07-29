@@ -4,18 +4,15 @@ This guide explains how to package and distribute a polished GMOS mod.
 
 ## 1. Required structure
 
-Your mod folder must contain:
+Your mod folder must contain at minimum:
 
 ```
 
 MyMod/
     mod.mos
-    patches/
-    assets/
-    README.txt (optional but recommended)
-
 ```
 
+*(Other folders like `patches/` and `assets/`, as well as a `README.txt`, are optional but recommended)*
 ## 2. Naming Rules
 
 - Folder name must be unique  
@@ -40,16 +37,7 @@ Use SemVer:
 
 GMOS displays version and warns on mismatches.
 
-## 5. Test Before Shipping
-
-1. In GMOS, click **Simulate & Diff**  
-2. Examine the generated unified diff  
-3. Confirm patch hunks represent the intended changes  
-4. Apply Patch  
-5. Launch game  
-6. Validate behavior with other known mods installed
-
-## 6. Distribution
+## 5. Distribution
 
 Recommended packaging:
 
@@ -73,7 +61,7 @@ When a user extracts this ZIP into `<GameDir>/mods/`, it should produce:
 
 ```
 
-## 7. Legal Note
+## 6. Legal Note
 
 Mods may interact with proprietary game files.  
 Respect the game's EULA and ensure your distribution does not include copyrighted assets without permission.

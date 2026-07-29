@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "godot-mod-overhaul-system"
-version = "1.0.0"
+version = "2.0.0"
 description = "External mod loader and patcher for Godot games."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { text = "GPL-3.0-or-later" }
@@ -13,7 +13,11 @@ requires-python = ">=3.10"
 dependencies = [
     "typing_extensions>=4.0; python_version < '3.11'",
     "ttkbootstrap",  # Required for UI
-    "psutil"         # Required for IO
+    "psutil",        # Required for IO
+    "requests",      # Required for Net
+    "bsdiff4",       # Required for Patcher
+    "pillow",        # Required for Images
+    "tkinterdnd2"    # Required for Drag-and-Drop Support
 ]
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -56,7 +60,8 @@ warn_unused_ignores = false
 line-length = 88
 lint.select = ["E", "W", "F", "I", "B", "C"]
 lint.ignore = ["E501"]
-# optionally: lint.exclude = ["tests/*"]
+# optionally: lint.exclude = ["tests/*"] 
+# Tests are also important.
 
 [tool.ruff.lint.per-file-ignores]
 # B017: assert raises(Exception) is acceptable in generic failure tests

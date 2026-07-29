@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Kim
+# SPDX-FileCopyrightText: 2025-2026 Kim
 # SPDX-License-Identifier: GPL-3.0-or-later
 # GMOS I/O Safety Test Suite
 import os

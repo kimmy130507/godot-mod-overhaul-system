@@ -6,13 +6,12 @@ GMOS ensures that the game installation remains recoverable, even after a failed
 
 GMOS never modifies a file in-place without a backup.
 
-**The "Write-Replace" Cycle:**
-1.  Read original file `game.gd`.
-2.  Write modified content to `game.gd.tmp`.
-3.  If `game.gd.bak` does not exist, rename `game.gd` $\to$ `game.gd.bak`.
-4.  Rename `game.gd.tmp` $\to$ `game.gd`.
+**The "VFS & Symlink" Cycle:**
+1.  Modified content is built in memory (VFS) and safely written to a cache directory (`gmos_data/cache/merged/game.gd`).
+2.  If the target file in the game directory exists and is a vanilla file (not a symlink), it is moved to `game.gd.bak`.
+3.  A symbolic link is deployed at `game.gd`, pointing to the safely cached file (or directly to the mod source). If symlinking fails, it falls back to a hard copy.
 
-This ensures that at any given moment, either the original or the new file is valid. There is no state where the file is half-written or corrupted.
+This ensures that the original game files are preserved untouched on the disk, and modifications are seamlessly overlaid using symlinks without destructive overwrites.
 
 # 2. Recovery Mechanism
 

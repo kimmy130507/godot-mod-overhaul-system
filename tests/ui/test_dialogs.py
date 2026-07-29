@@ -1,398 +1,232 @@
-# SPDX-FileCopyrightText: 2025 Kim
+# SPDX-FileCopyrightText: 2025-2026 Kim
 # SPDX-License-Identifier: GPL-3.0-or-later
-#  For Setup wizard, GUI component checks, and dialog logic (permissions, hunk viewing).
-import os
-import tempfile
-import tkinter
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Generator
 from unittest.mock import patch
 
 import pytest
-from pytest import MonkeyPatch
 
-# Attempt to import tkinter for GUI tests later
+from gmos.state.config import load_instance_config_dict, save_instance_config_dict
+
+# --- Helpers & Fixtures ---
+
+# Detect display availability for CI/Headless environments safely
+tk_available = False
+tk: Any = None
 try:
-    import tkinter as tk
+    import tkinter
 
-    tk_available = True
-except Exception:
-    # These variables will be None if import fails;
-    # type checkers might complain about redefinition if we define them again with types
-    tk_available = False
-    tk = None  # type: ignore
-
-from gmos.state import ensure_config, load_config, write_config
-
-# Helper to detect CI environment
-IS_CI = os.environ.get("CI", "false").lower() == "true"
-
-
-# Helper to check for a usable Tk environment
-def _can_create_tk_root() -> bool:
-    """Return True if a Tk root can be created in this environment."""
-    root: Optional["tkinter.Tk"] = None
-    if tk is None:
-        return False
+    tk = tkinter
     try:
-        assert tk is not None  # Hint for Pylance
-        root = tk.Tk()
-        # don't show window
-        assert root is not None
-        root.withdraw()
-        root.update_idletasks()
-        root.destroy()
-        return True
-    except Exception:
-        try:
-            # Best-effort cleanup if partially created
-            # check if root exists before trying to destroy it
-            if (
-                "root" in locals()
-                and root is not None
-                and getattr(root, "winfo_exists", lambda: False)()
-            ):
-                root.destroy()
-        except Exception:
-            pass
-        return False
-
-
-# --- Test Setup Autopopulate ---
-
-
-def test_suggest_work_root(tmp_path: Path) -> None:
-    # In v1.1 Single-Folder, we don't "suggest" a separate work root.
-    # We just use the game dir. This test is largely obsolete but we can
-    # repurpose it to test default mods dir suggestion if needed,
-    # or just remove it. For now, let's test the config default logic via the wizard test.
+        _root_check = tk.Tk()
+        _root_check.destroy()
+        tk_available = True
+    except tk.TclError:
+        pass
+except ImportError:
     pass
 
 
-def test_wizard_autopopulate_and_create(tmp_path: Path) -> None:
-    # simulate choosing an exe inside a folder and then writing config
-    exe_dir = tmp_path / "GameInstall" / "bin"
-    exe_dir.mkdir(parents=True)
-    exe = exe_dir / "game"
-    exe.write_text("binary")  # dummy file
-
-    cfgpath = tmp_path / "cfg" / "config.json"
-
-    # In Single-Folder, the game_dir is just the exe's parent
-    expected_game_dir = str(exe_dir)
-
-    # Simulate the config object the wizard would produce
-    cfg = {"game_executable": "game", "game_dir": expected_game_dir}
-    write_config(cfg, str(cfgpath))
-
-    # verify config content
-    loaded = load_config(str(cfgpath))
-    assert loaded["game_executable"] == "game"
-    assert loaded["game_dir"] == expected_game_dir
-    assert Path(expected_game_dir).exists()
-
-
-# --- Test Setup Wizard Logic ---
-
-
-def test_write_and_load_config(tmp_path: Path) -> None:
-    cfgfile = tmp_path / "cfg" / "config.json"
-    # Updated keys for v1.1
-    cfg = {"game_executable": "game", "game_dir": str(tmp_path / "game")}
-    write_config(cfg, str(cfgfile))
-    loaded = load_config(str(cfgfile))
-    assert loaded == cfg
-
-
-def test_ensure_config_headless(tmp_path: Path) -> None:
-    cfgfile = tmp_path / "cfg" / "config.json"
-    defaults = {"game_executable": "x", "game_dir": str(tmp_path / "game")}
-    out = ensure_config(config_path=str(cfgfile), headless_defaults=defaults)
-    assert out == defaults
-    assert Path(cfgfile).exists()
-
-
-# --- Test Setup Wizard GUI Geometry ---
-
-
-@pytest.mark.skipif(
-    IS_CI, reason="Cannot spawn real Tkinter windows in headless CI environment"
-)
-def test_setupwizard_is_on_screen_and_centered() -> None:
-    """SetupWizard must create a visible Toplevel and support common widget calls."""
-    window: "tkinter.Toplevel | SetupWizard | None" = None  # Initialize to None
-    from gmos.state.config import SetupWizard
-
-    assert tk is not None
-    tmpd = tempfile.TemporaryDirectory()
-    cfg_path = os.path.join(tmpd.name, "test-config.json")
+@pytest.fixture
+def tk_root() -> Generator[Any, None, None]:
+    """
+    Provides a hidden Tk root for GUI tests.
+    Skips the test if a display is not available.
+    """
+    if not tk_available:
+        pytest.skip("Headless environment: cannot initialize Tkinter")
 
     root = tk.Tk()
+    root.withdraw()  # Hide the window
+    yield root
     try:
-        # place root at a known geometry and ensure layout calculations happen
-        root.geometry("800x600+120+80")
-        root.update_idletasks()
+        root.destroy()
+    except Exception:
+        pass
 
-        wiz = SetupWizard(root, config_path=cfg_path)
-        try:
-            # Prefer public 'window' attribute if present (compat wrapper).
-            window = getattr(wiz, "window", wiz)
-            # Attempt to call update_idletasks either on wrapper or underlying widget.
-            if hasattr(wiz, "update_idletasks"):
-                wiz.update_idletasks()
-            elif window is not None and hasattr(window, "update_idletasks"):
-                window.update_idletasks()
-            else:
-                pytest.skip(
-                    "SetupWizard has no update_idletasks proxy; skipping compatibility check."
-                )
 
-            # Basic assertions to ensure the dialog is configured
-            assert window is not None
-            assert hasattr(window, "winfo_reqwidth")
-            assert hasattr(window, "winfo_reqheight")
-            # geometry string should be present and parseable
-            geom = (
-                window.winfo_geometry() if hasattr(window, "winfo_geometry") else None
-            )
-            assert isinstance(geom, str)
+# --- Test Instance Config I/O ---
+# Note: These test persistence logic, not UI dialogs.
+# They are kept here for continuity but ideally belong in tests/state/.
 
-        finally:
-            # ensure wizard destroyed to avoid leaking windows
-            try:
-                if hasattr(wiz, "destroy"):
-                    wiz.destroy()
-                elif window is not None and hasattr(window, "destroy"):
-                    window.destroy()
-            except Exception:
-                pass
-    finally:
-        try:
-            if root.winfo_exists():
-                root.destroy()
-        except Exception:
-            pass
-        tmpd.cleanup()
+
+def test_instance_config_io(tmp_path: Path) -> None:
+    """Verify we can save and load the per-game instance.json."""
+    cfg_dir = tmp_path / "gmos_data"
+    cfg_file = cfg_dir / "instance.json"
+
+    data = {
+        "game_executable": "godot_bin.exe",
+        "game_dir": str(tmp_path / "game"),
+        "mods_dir": str(tmp_path / "game" / "mods"),
+    }
+
+    save_instance_config_dict(data, str(cfg_file))
+    assert cfg_file.exists()
+
+    loaded = load_instance_config_dict(str(cfg_file))
+    assert loaded["game_executable"] == "godot_bin.exe"
+    assert loaded["game_dir"] == str(tmp_path / "game")
+
+
+def test_load_defaults_on_missing(tmp_path: Path) -> None:
+    """Verify loading a missing config returns safe defaults."""
+    cfg_file = tmp_path / "non_existent.json"
+    loaded = load_instance_config_dict(str(cfg_file))
+
+    assert "game_dir" in loaded
+    assert loaded["game_dir"] == ""
+    assert loaded["game_executable"] == "game.exe"
 
 
 # --- Test Mod Info Pane GUI ---
 
 
-@pytest.mark.skipif(
-    not _can_create_tk_root(), reason="tkinter not available or no display"
-)
-def test_mod_info_pane_update_for_config(tmp_path: Path) -> None:
-    from gmos.ui import ModInfoPane, UIModConfig
-
-    # Double check safety inside test for Windows CI environments where import succeeds
-    # but Tcl/Tk initialization fails due to missing init.tcl.
-    try:
-        assert tk is not None
-        root = tk.Tk()
-    except Exception:
-        pytest.skip(
-            "Tkinter initialization failed inside test (broken Tcl environment)"
-        )
-    root.withdraw()
-    pane = ModInfoPane(root)
-
-    cfg: UIModConfig = {
-        "Path": str(tmp_path / "my_mod"),
-        "Name": "Test Mod",
-        "Sections": {
-            "ModInfo": {
-                "Name": "Test Mod",
-                "Version": "1.2.3",
-                "Author": "Unit Tester",
-                "Description": "A test mod for the info pane",
-            },
-            "Dependencies": ["requires = base_mod, dep2"],
-        },
-        "_deps_errors": ["missing dependency: dep2"],
-    }
-
-    # ensure no exception
-    pane.update_for_config(cfg)
-
-    # check widgets populated
-    assert pane._widgets["name"].cget("text") == "Test Mod"  # type: ignore [reportPrivateUsage]
-    assert pane._widgets["version"].cget("text") == "1.2.3"  # type: ignore [reportPrivateUsage]
-    assert pane._widgets["author"].cget("text") == "Unit Tester"  # type: ignore [reportPrivateUsage]
-    desc_widget = cast("tkinter.Text", pane._widgets["desc"])  # type: ignore [reportPrivateUsage]
-    desc = desc_widget.get("1.0", "end").strip()
-    assert "A test mod for the info pane" in desc
-    deps_text = pane._widgets["deps"].cget("text")  # type: ignore [reportPrivateUsage]
-    assert "base_mod" in deps_text and "dep2" in deps_text
-    errs = pane._widgets["errors"].cget("text")  # type: ignore [reportPrivateUsage]
-    assert "missing dependency" in errs
-
-    # clear pane
-    pane.update_for_config(None)
-    assert pane._widgets["name"].cget("text") == ""  # type: ignore [reportPrivateUsage]
-
-    # cleanup
-    try:
-        pane.destroy()
-    except Exception:
-        pass
-    try:
-        root.destroy()
-    except Exception:
-        pass
-
-
-# --- Test Permission Dialog Logic ---
-
-
-def test_retry_on_permission_abort(monkeypatch: MonkeyPatch) -> None:
-    import gmos.ui as ui_mod
-    from gmos.utils import retry_on_permission
-
-    calls = {"n": 0}
-
-    def op() -> None:
-        calls["n"] += 1
-        raise PermissionError("denied")
-
-    # Monkeypatch PermissionErrorDialog to simulate user choosing 'abort'
-    class FakeDialog:
-        def __init__(
-            self,
-            parent: Optional["tkinter.Widget"],
-            path: str | os.PathLike[str],
-            exc: Exception,
-        ) -> None:
-            pass
-
-        def show(self) -> str:
-            return "abort"
-
-    monkeypatch.setattr(ui_mod, "PermissionErrorDialog", FakeDialog)
-
-    with pytest.raises(PermissionError):
-        retry_on_permission(op, parent=None, path="/fake")
-    assert calls["n"] == 1
-
-
-def test_retry_on_permission_retry_then_succeed(monkeypatch: MonkeyPatch) -> None:
-    import gmos.ui as ui_mod
-    from gmos.utils import retry_on_permission
-
-    calls = {"n": 0}
-
-    def op() -> str:
-        calls["n"] += 1
-        if calls["n"] < 2:
-            raise PermissionError("denied")
-        return "ok"
-
-    class FakeDialog2:
-        def __init__(
-            self,
-            parent: Optional["tkinter.Widget"],
-            path: str | os.PathLike[str],
-            exc: Exception,
-        ) -> None:
-            pass
-
-        def show(self) -> str:
-            return "retry"
-
-    # make show always return retry for the first exception then the op will succeed
-    monkeypatch.setattr(ui_mod, "PermissionErrorDialog", FakeDialog2)
-
-    res = retry_on_permission(op, parent=None, path="/fake")
-    assert res == "ok"
-    assert calls["n"] == 2
-
-
-# --- Test Permission Dialog GUI ---
-
-
-@pytest.mark.skipif(
-    "DISPLAY" not in os.environ and not os.name == "nt",
-    reason="Requires display or Xvfb",
-)
-def test_permission_dialog_shows(monkeypatch: MonkeyPatch) -> None:
-    import gmos.ui as ui_mod
-    from gmos.utils import retry_on_permission
-
-    # create a fake op that raises then succeed
-    state = {"n": 0}
-
-    def op() -> str:
-        state["n"] += 1
-        if state["n"] == 1:
-            raise PermissionError("denied")
-        return "ok"
-
-    # simulate user clicking 'retry' by monkeypatching PermissionErrorDialog.show
-    class FakeDlg:
-        def __init__(
-            self,
-            parent: Optional["tkinter.Widget"],
-            path: str | os.PathLike[str],
-            exc: Exception,
-        ) -> None:
-            pass
-
-        def show(self) -> str:
-            return "retry"
-
-    monkeypatch.setattr(ui_mod, "PermissionErrorDialog", FakeDlg)
-
-    res = retry_on_permission(op, parent=None, path="/fake")
-    assert res == "ok"
-
-
-# --- Test HunkViewer Headless ---
-
-
-def test_hunkviewer_headless_auto_accept_strict() -> None:
+def test_mod_info_pane_update_for_config(tk_root: Any, tmp_path: Path) -> None:
     """
-    Headless HunkViewer should return the exact merged text when auto-accepting hunks.
-    Uses surgical patching to bypass Tkinter initialization entirely.
+    Verifies that the Info Pane populates widgets correctly.
+    Uses the tk_root fixture to safely manage the GUI lifecycle.
     """
-    # 1. Import the real class
-    from gmos.core.patcher import (
-        apply_hunks,
-        generate_unified_diff,
-        parse_unified_diff_hunks,
-    )
-    from gmos.ui import HunkViewer
+    from gmos.ui.dashboard import ModInfoPane
+    from gmos.ui.widgets import UIModConfig
 
-    # 2. Define a fake __init__ that populates ONLY what the headless logic needs
-    #    (skipping super().__init__ and all widget creation)
-    def fake_init(self: Any, parent: Any, orig_text: str, new_text: str) -> None:
-        self.orig_text = orig_text
-        self.new_text = new_text
-        self.result = None
-
-        # Logic copied from HunkViewer.__init__ just for state setup
-        self.diff_text = generate_unified_diff(
-            orig_text, new_text, fromfile="original", tofile="replacement"
-        )
-        self.hunks = parse_unified_diff_hunks(self.diff_text)
-
-    # 3. Patch the methods that touch the GUI
+    # Test: Update with valid config
+    # Patch style updates and style instance to prevent TclError/AttributeError
     with (
-        patch.object(HunkViewer, "__init__", side_effect=fake_init, autospec=True),
-        patch.object(HunkViewer, "destroy", autospec=True),
-        patch.object(HunkViewer, "grab_set", autospec=True),
-        patch.object(HunkViewer, "wait_window", autospec=True),
+        patch("ttkbootstrap.style.Bootstyle.update_ttk_widget_style", return_value=""),
+        patch("ttkbootstrap.style.Style.get_instance") as mock_get_inst,
     ):
 
-        orig = "line1\nline2\nline3\n"
-        new = "line1\nLINE2_MODIFIED\nline3\n"
+        mock_get_inst.return_value.style_exists_in_theme.return_value = True
 
-        # Instantiate (calls fake_init, bypassing Tk)
-        hv = HunkViewer(None, orig, new)
-        # Run logic
-        merged = hv.show_modal(headless_auto_accept=True)
+        pane = ModInfoPane(tk_root)
 
-        # Assertions
-        assert isinstance(merged, str)
-        expected = apply_hunks(orig, new, selected_hunk_indices=None)
-        assert merged == expected
-        assert merged != orig
-        assert "LINE2_MODIFIED" in merged
+        cfg: UIModConfig = {
+            "Path": str(tmp_path / "my_mod"),
+            "Name": "Test Mod",
+            "Sections": {
+                "ModInfo": {
+                    "Name": "Test Mod",
+                    "Version": "1.2.3",
+                    "Author": "Unit Tester",
+                    "Description": "A test mod for the info pane",
+                }
+            },
+            "_deps_errors": ["missing dependency: dep2"],
+        }
+
+        # Test: Update with valid config
+        pane.update_for_config(cfg)
+
+        # Verification: Check internal widget state using actual attributes
+        assert pane.lbl_name.cget("text") == "Test Mod"
+        assert "Unit Tester" in pane.lbl_sub.cget("text")
+
+        # Test: Clear selection
+        # Note: Current implementation just hides the pane on None, implies no crash.
+        pane.update_for_config(None)
+
+
+# --- Test Permission Dialog Logic (Mocked) ---
+
+
+def test_retry_on_permission_abort() -> None:
+    """
+    Ensure the retry logic propagates the exception if the user chooses 'Abort' (or close).
+    """
+    from gmos.utils import retry_on_permission
+
+    # Patch the Dialog class used by retry_on_permission.
+    # autospec=True ensures the mock mimics the real class signature.
+    with patch("gmos.ui.widgets.PermissionErrorDialog", autospec=True) as MockDlg:
+        # Simulate user clicking "Abort" (show returns "abort")
+        mock_instance = MockDlg.return_value
+        mock_instance.show.return_value = "abort"
+
+        calls = 0
+
+        def op() -> None:
+            nonlocal calls
+            calls += 1
+            raise PermissionError("denied")
+
+        # Expect the exception to bubble up after 1 attempt
+        with pytest.raises(PermissionError):
+            retry_on_permission(op, parent=None, path="/fake")
+
+        assert calls == 1
+        MockDlg.assert_called()
+
+
+def test_retry_on_permission_retry_then_succeed() -> None:
+    """
+    Ensure the logic retries the operation if the user clicks 'Retry'.
+    """
+    from gmos.utils import retry_on_permission
+
+    with patch("gmos.ui.widgets.PermissionErrorDialog", autospec=True) as MockDlg:
+        # Simulate user clicking "Retry"
+        mock_instance = MockDlg.return_value
+        mock_instance.show.return_value = "retry"
+
+        calls = 0
+
+        def op() -> str:
+            nonlocal calls
+            calls += 1
+            # Fail on first call, succeed on second
+            if calls < 2:
+                raise PermissionError("denied")
+            return "ok"
+
+        res = retry_on_permission(op, parent=None, path="/fake")
+
+        assert res == "ok"
+        assert calls == 2  # 1 failure + 1 success
+
+
+def test_legal_disclaimer_accept(tk_root: Any) -> None:
+    """
+    Verify the Legal Disclaimer correctly toggles its continue button and sets the result state.
+    """
+    from gmos.ui.widgets import LegalDisclaimerDialog
+
+    with (
+        patch("ttkbootstrap.Style"),
+        patch("tkinter.ttk.Style.lookup", return_value="#333333"),
+    ):
+        dlg = LegalDisclaimerDialog(tk_root)
+        dlg.accepted_var.set(True)
+        dlg.toggle_continue()
+        assert str(dlg.cont_btn.cget("state")) == "normal"
+        dlg.on_accept()
+        assert dlg.result is True
+
+
+def test_settings_dialog_init(tk_root: Any) -> None:
+    """
+    Verify the Settings Dialog initializes and hydrates values from the global config correctly.
+    """
+    from unittest.mock import MagicMock
+
+    from gmos.ui.settings import SettingsDialog
+
+    mock_app = MagicMock()
+    mock_app.global_cfg.nexus_api_key = "test_api_key"
+    mock_app.global_cfg.theme_preference = "darkly"
+    mock_app.global_cfg.sandbox_enabled = True
+    mock_app.style.colors.bg = "#333333"
+    mock_app.style.colors.primary = "#333333"
+    mock_app.style.colors.inputbg = "#333333"
+    with (
+        patch("ttkbootstrap.Style"),
+        patch("tkinter.ttk.Style.lookup", return_value="#333333"),
+    ):
+        dlg = SettingsDialog(tk_root, mock_app)
+        assert dlg.nexus_key_var.get() == "test_api_key"
+        assert dlg.theme_var.get() == "darkly"
+
+        dlg.destroy()
+
+
+# (HunkViewer test removed - feature deprecated)

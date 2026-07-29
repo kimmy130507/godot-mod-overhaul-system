@@ -27,7 +27,7 @@ All mods must live here:
 
 This is required because Godot resolves assets relative to the game root. Many mods reference assets inside their own mod directory using `res://mods/...` or relative paths. External mod folders would break runtime loading.
 
-## 2. Manifest-Based Modding
+## 2. [Manifest-Based Modding](docs/ModAuthorGuide/ManifestFormat.md)
 
 Each mod must include a `mod.mos` INI-style manifest:
 
@@ -43,7 +43,7 @@ res://scripts/player.gd = patches/player_override.gd
 
 Manifests describe how GMOS should apply the mod safely and predictably.
 
-## 3. Deterministic Patching
+## 3. [Deterministic Patching](docs/ModAuthorGuide/PatchTypes.md)
 
 GMOS applies mods using:
 
@@ -54,7 +54,7 @@ GMOS applies mods using:
 
 This ensures reproducible behavior even with many mods modifying the same files.
 
-## 4. Sandbox & Security System
+## 4. [Sandbox & Security System](docs/ModAuthorGuide/ScriptPatching.md)
 
 GMOS includes a GDScript **Sandbox Autoload Singleton**:
 
@@ -67,7 +67,7 @@ Dangerous APIs (like `OS.execute`) are rewritten automatically:
   - mods cannot silently run OS commands,
   - all calls are intercepted and validated by the sandbox payload.
 
-## 5. The Workspace SDK
+## 5. [The Workspace SDK](docs/ModAuthorGuide/WorkspaceSDK.md)
 
 GMOS includes a Python-based development SDK (`GodotBridge`) for:
 
@@ -79,6 +79,12 @@ GMOS includes a Python-based development SDK (`GodotBridge`) for:
 
 This is the fastest and safest way to create mods.
 
+## 6. [Non-Destructive PCK Overrides](docs/Internals/PCKRebuild.md)
+
+Rather than permanently modifying a game's massive `main.pck` or cluttering the directory with loose files, GMOS compiles all active mod files into a single, lightweight `gmos_override.pck` during the patch run.
+
+The injected Sandbox Autoload mounts this override package at runtime using `ProjectSettings.load_resource_pack("res://gmos_override.pck", true)`. This ensures modded assets seamlessly overwrite vanilla assets in memory while keeping the base game intact on disk
+
 -----
 
-Continue reading the next sections for details on manifests, patching rules, function wrapping, and SDK workflows.
+Continue reading the next sections for details on [manifests](docs/ModAuthorGuide/ManifestFormat.md), [patching rules](docs/ModAuthorGuide/PatchTypes.md), [function wrapping](docs/ModAuthorGuide/ScriptPatching.md), and [SDK workflows](docs/ModAuthorGuide/WorkspaceSDK.md).

@@ -28,13 +28,17 @@ All code must pass without warnings.
 
 # 3. Type Hints
 
-Everything must be type-annotated.
-No `Any` unless unavoidable.
+Everything must be type-annotated. No `Any` unless unavoidable.
+
+Despite targeting Python 3.10+, GMOS strictly uses the `typing` module (`Dict`, `List`, `Tuple`, `Set`, `Optional`, `Union`) for type hints to maintain consistency with the existing codebase. Do not use built-in types (`dict`, `list`) for annotations.
 
 Example:
 
 ```python
-def load_manifest(path: str) -> dict[str, Any]:
+from typing import Any, Dict
+
+def load_manifest(path: str) -> Dict[str, Any]:
+
 ```
 
 # 4. Naming Conventions
@@ -51,7 +55,7 @@ def load_manifest(path: str) -> dict[str, Any]:
 Each module must:
 
 * have a clear responsibility
-* avoid circular imports
+* avoid circular imports at runtime (use `if TYPE_CHECKING:` for type-hinting imports that would otherwise cause a cycle)
 * be import-safe (`import gmos` must not run heavyweight code)
 
 # 6. License Headers
