@@ -2,9 +2,9 @@ name: CI (Code Quality, Tests, Security)
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, dev ]
 
 env:
   FORCE_COLOR: 1
