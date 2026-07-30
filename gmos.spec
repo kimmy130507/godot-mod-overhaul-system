@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
-from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT, BUNDLE
+from PyInstaller.building.build_main import Analysis, PYZ, EXE, BUNDLE
 from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
@@ -53,13 +53,18 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,   
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
+    exclude_binaries=False,
     name='GMOS',
     debug=False,        
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=False, # GUI mode
     disable_windowed_traceback=False,
     target_arch=None,
@@ -68,31 +73,17 @@ exe = EXE(
     icon=icon_file
 )
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='GMOS',
-)
-
-# Bind BUNDLE directly to exe and analysis outputs, avoiding coll
-app = BUNDLE(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    name='GMOS.app',
-    icon=icon_file,
-    bundle_identifier='io.github.kimmy130507.gmos',
-    info_plist={
-        'CFBundleName': 'GMOS',
-        'CFBundleDisplayName': 'Godot Mod Overhaul System',
-        'CFBundleShortVersionString': '2.0.0',
-        'CFBundleVersion': '2.0.0',
-        'NSHighResolutionCapable': 'True'
-    },
-)
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        exe,
+        name='GMOS.app',
+        icon=icon_file,
+        bundle_identifier='io.github.kimmy130507.gmos',
+        info_plist={
+            'CFBundleName': 'GMOS',
+            'CFBundleDisplayName': 'Godot Mod Overhaul System',
+            'CFBundleShortVersionString': '2.0.0',
+            'CFBundleVersion': '2.0.0',
+            'NSHighResolutionCapable': 'True'
+        },
+    )
