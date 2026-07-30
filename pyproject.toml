@@ -12,7 +12,7 @@ authors = [{ name = "Kim", email = "kimmy130507@gmail.com" }]
 requires-python = ">=3.10"
 dependencies = [
     "typing_extensions>=4.0; python_version < '3.11'",
-    "ttkbootstrap",  # Required for UI
+    "ttkbootstrap==1.20.4",  # Required for UI
     "psutil",        # Required for IO
     "requests",      # Required for Net
     "bsdiff4",       # Required for Patcher
