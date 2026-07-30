@@ -1,15 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
-from PyInstaller.building.build_main import Analysis, PYZ, EXE, BUNDLE
+from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT, BUNDLE
 from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
-tmp_ret = collect_all('ttkbootstrap')
-datas = tmp_ret[0]
-binaries = tmp_ret[1]
-hiddenimports = tmp_ret[2]
+datas = []
+binaries = []
+hiddenimports = []
+
+# Collect all required packages that rely on external data/binaries
+for pkg in ['ttkbootstrap', 'tkinterdnd2']:
+    pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(pkg)
+    datas += pkg_datas
+    binaries += pkg_binaries
+    hiddenimports += pkg_hiddenimports
 
 # Define the new asset root
 ASSET_ROOT = os.path.join('gmos', 'assets')
@@ -19,8 +25,8 @@ if os.path.exists(ASSET_ROOT):
     datas.append((ASSET_ROOT, 'gmos/assets'))
 
 hiddenimports.append('gmos.ui')
-# Platform-specific icon
 
+# Platform-specific icon
 icon_file = None
 if sys.platform == "darwin":
     icon_file = os.path.join(ASSET_ROOT, 'gmos.icns')
@@ -41,22 +47,19 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='GMOS',
     debug=False,        
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False, # GUI mode
     disable_windowed_traceback=False,
     target_arch=None,
@@ -65,14 +68,29 @@ exe = EXE(
     icon=icon_file
 )
 
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='GMOS',
+)
+
+# Bind BUNDLE directly to exe and analysis outputs, avoiding coll
 app = BUNDLE(
     exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     name='GMOS.app',
     icon=icon_file,
     bundle_identifier='io.github.kimmy130507.gmos',
     info_plist={
         'CFBundleName': 'GMOS',
-        'CFBundleDisplayName': 'Godot Mod Overhaul Manager',
+        'CFBundleDisplayName': 'Godot Mod Overhaul System',
         'CFBundleShortVersionString': '2.0.0',
         'CFBundleVersion': '2.0.0',
         'NSHighResolutionCapable': 'True'
