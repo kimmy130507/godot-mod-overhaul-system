@@ -14,11 +14,12 @@ It features a **"Gold Standard" Architecture** built on six pillars (Core, IO, S
 * **P2P Multiplayer Sync:** Host a local lobby to automatically sync your exact mod load order and archives to connecting friends.
 * **Active Security (Sandboxing):** Actively rewrites unsafe GDScript (like `OS.execute` or `load("malware.dll")`) at runtime to prevent malicious code execution.
 * **Override PCK Architecture:** Compiles modded assets into a standalone `gmos_override.pck` mounted dynamically at runtime—zero disk bloat, zero original file corruption.
+* **Headless CLI:** Execute automated dry-runs, support bundle generation, and P2P lobbies directly from the terminal without the GUI.
 * **Developer SDK:** Built-in tooling to decompile games (via GDRE Tools), auto-detect code diffs, and generate `mod.mos` manifests automatically.
 
 ## **Quick Start (Players)**
 
-1. Download the **GMOS Executable** (`gmos.exe` or `gmos`) from **Releases**.
+1. Download the appropriate **ZIP archive** (`GMOS-windows-latest.zip`, etc.) from **Releases** and extract it.
 2. Launch GMOS.
 3. Use the **Instance Manager** to add and activate your game directory.
 4. Download mods manually or via the integrated **Browser**.
@@ -32,11 +33,14 @@ GMOS mods use a simple folder structure with a `mod.mos` manifest.
 
 ```ini
 [ModInfo]
-name = My Mod
-version = 1.0.0
+Name = My Mod
+Version = 1.0.0
 
 [FileReplace]
 res://scripts/player.gd = patches/player.gd
+
+[BinaryPatch]   
+res://art/player.tex = patches/player_skin.bin
 
 [SmartPatch]
 res://scripts/combat.gd::take_damage = patches/damage_hook.gd ; anchor="health -= amt"
@@ -59,10 +63,11 @@ See [Workspace SDK](docs/ModAuthorGuide/WorkspaceSDK.md).
 
 ## **Security Architecture**
 
-GMOS employs a **Two-Layer Defense** model:
+GMOS employs a **Three-Layer Defense** model:
 
-1. **Static Analyzer (Scanner):** Audits files for suspicious patterns (`FileAccess`, `DirAccess`) and warns the user before installation.
-2. **Runtime Sanitizer (Rewriter):** Actively modifies script code during the patch run to redirect RCE vectors (`OS.execute`, `OS.shell_open`) to a strict sandbox proxy (`GMOS_Sandbox`).
+1. **Static Analyzer (Scanner):** Audits files for suspicious patterns (`DirAccess`, `HTTPClient`, `.dll`/`.so` loads) and warns the user before installation.
+2. **Runtime Sanitizer (Rewriter):** Actively modifies script code using an Abstract Syntax Tree (`GDScriptParser`) to redirect RCE vectors (`OS.execute`, `OS.shell_open`) to a strict sandbox proxy (`GMOS_Sandbox`).
+3. **Pipeline Validation:** Strictly validates archive extraction to prevent Zip Slip attacks and utilizes topological sorting to detect cyclic or malicious dependency chains.
 
 See [Security Overview](docs/Security/Overview.md).
 
